@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:shuffle": "vitest run --sequence.shuffle --sequence.seed=20260906",
-    "test:coverage": "vitest run --coverage --reporter=default --reporter=junit --outputFile.junit=test-reports/junit.xml"
+    "test:coverage": "vitest run --coverage --reporter=default --reporter=junit --outputFile.junit=test-reports/junit.xml",
+    "build:cloudflare": "vite build --mode cloudflare"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

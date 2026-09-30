@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # Comma-separated browser origins allowed to call the API with credentials.
     ALLOWED_ORIGINS: str = "http://localhost:8080,http://127.0.0.1:8080"
     ML_DEVICE: str = "auto"
+    # Remote model execution. API routing stays unchanged; GPU workers can
+    # delegate individual model operations to a deployed Modal Function.
+    INFERENCE_BACKEND: Literal["local", "modal"] = "local"
+    MODAL_APP_NAME: str = "echo-inference"
     # Run eager-attention extraction on the CPU regardless of ML_DEVICE.
     # `output_attentions=True` forces transformers onto its eager attention path,
     # whose manual bmm torch dispatches to a Triton kernel; that kernel segfaults
@@ -107,7 +111,7 @@ class Settings(BaseSettings):
     FR10_MIN_GROUP_SIZE: PositiveInt = 8
     FR10_MIN_SPEAKERS_PER_GROUP: PositiveInt = 2
 
-    @field_validator("ENVIRONMENT", "COOKIE_SAMESITE", "STORAGE_BACKEND", "ML_DEVICE", mode="before")
+    @field_validator("ENVIRONMENT", "COOKIE_SAMESITE", "STORAGE_BACKEND", "ML_DEVICE", "INFERENCE_BACKEND", mode="before")
     @classmethod
     def _normalise(cls, value):
         return value.strip().lower() if isinstance(value, str) else value

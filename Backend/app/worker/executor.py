@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import json
 import logging
@@ -32,6 +33,10 @@ class JobCancelled(Exception):
 
 
 def _jsonable(value: Any) -> Any:
+    # Modal workers may not have the same ML runtime installed as the client.
+    # Convert tensors before returning results across the process boundary.
+    if hasattr(value, "detach") and hasattr(value, "cpu") and hasattr(value, "tolist"):
+        return _jsonable(value.detach().cpu().tolist())
     try:
         import numpy as np
 
@@ -371,6 +376,8 @@ def _execute_one(
         return extract_audio_frequency_features(str(audio_path))
     if not model:
         raise ValueError(f"{operation} requires a model")
+    if settings.INFERENCE_BACKEND == "modal":
+        return _execute_one_modal(operation, model, audio_path, parameters, model_spec)
     from app.worker.model_adapters import get_model_adapter
     from app.worker.model_registry import model_registry
 
@@ -379,6 +386,45 @@ def _execute_one(
         raise ValueError(f"{model} does not support {operation}")
     resource = model_registry.prepare(adapter, operation)
     return adapter.execute(operation, str(audio_path), parameters, resource)
+
+
+@lru_cache(maxsize=2)
+def _modal_inference_function(function_name: str):
+    """Resolve the deployed Modal function once per Celery worker process."""
+    import modal
+
+    return modal.Function.from_name(settings.MODAL_APP_NAME, function_name)
+
+
+def _execute_one_modal(
+    operation: str,
+    model: str,
+    audio_path: Path,
+    parameters: dict[str, Any],
+    model_spec=None,
+) -> Any:
+    """Send one audio item to Modal and return the existing adapter result shape.
+
+    Audio bytes are serialized by Modal's Function invocation path, so the
+    Modal container does not need access to the VPS filesystem or Redis.
+    """
+    spec_payload = model_spec.model_dump(mode="json") if model_spec is not None else None
+    large = model == "whisper-large" or operation in {
+        "saliency", "saliency_faithfulness", "attention",
+        "jacobian_lens_fit", "jacobian_lens_apply",
+    }
+    function_name = "infer_large" if large else "infer_fast"
+    response = _modal_inference_function(function_name).remote(
+        operation,
+        model,
+        audio_path.read_bytes(),
+        audio_path.suffix or ".wav",
+        parameters,
+        spec_payload,
+    )
+    if isinstance(response, str):
+        response = json.loads(response)
+    return response["result"]
 
 
 def _load_torch_artifact(storage: ObjectStorage, key: str, destination: Path) -> dict[str, Any]:

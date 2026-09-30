@@ -1,0 +1,110 @@
+name: echo
+
+x-api-env: &api-env
+  ENVIRONMENT: production
+  SESSION_TTL_SECONDS: 86400
+  JOB_TTL_SECONDS: 86400
+  SESSION_COOKIE_NAME: sid
+  COOKIE_SECURE: "true"
+  COOKIE_SAMESITE: lax
+  ALLOWED_ORIGINS: https://echo-frontend.janudaxx.workers.dev
+  MAX_UPLOAD_BYTES: 104857600
+  MAX_AUDIO_DURATION_SECONDS: 600
+  TASK_SOFT_TIME_LIMIT_SECONDS: 3300
+  TASK_TIME_LIMIT_SECONDS: 3600
+  REDIS_URL: redis://redis:6379/0
+  JOB_REDIS_URL: redis://redis:6379/1
+  CELERY_BROKER_URL: redis://redis:6379/2
+  CELERY_RESULT_BACKEND: redis://redis:6379/3
+  STORAGE_BACKEND: local
+  STORAGE_LOCAL_ROOT: /app/shared-storage
+  HF_HOME: /home/appuser/.cache/huggingface
+  PYTHONUNBUFFERED: "1"
+  ENABLE_LEGACY_SYNC_INFERENCE: "false"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  NUMBA_NUM_THREADS: "1"
+  NUMBA_THREADING_LAYER: workqueue
+  NUMBA_CPU_NAME: generic
+  NUMBA_CPU_FEATURES: ""
+  TORCH_DISABLE_NATIVE_JIT: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PYTHONFAULTHANDLER: "1"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../../Backend
+      dockerfile: Dockerfile
+      args: {ROLE: api, VARIANT: cpu}
+    environment: *api-env
+    volumes:
+      - ../../Backend/data:/app/data:ro
+      - ../../Backend/uploads:/app/uploads
+      - ../../Backend/shared-storage:/app/shared-storage
+      - ../../scripts/init-custom-datasets.sh:/app/init-custom-datasets.sh:ro
+    ports: ["8000:8000"]
+    depends_on:
+      redis: {condition: service_healthy}
+    command: ["sh", "-c", "sh /app/init-custom-datasets.sh && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  worker-cpu:
+    build:
+      context: ../../Backend
+      dockerfile: Dockerfile
+      args: {ROLE: worker, VARIANT: cpu}
+    environment:
+      <<: *api-env
+      INFERENCE_BACKEND: modal
+      MODAL_APP_NAME: echo-inference
+      MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:?Set MODAL_TOKEN_ID in the server .env}
+      MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:?Set MODAL_TOKEN_SECRET in the server .env}
+    shm_size: 1gb
+    volumes:
+      - ../../Backend/data:/app/data:ro
+      - ../../Backend/uploads:/app/uploads
+      - ../../Backend/shared-storage:/app/shared-storage
+      - hf-cache:/home/appuser/.cache/huggingface
+    depends_on:
+      redis: {condition: service_healthy}
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=cpu,gpu-fast,gpu-large", "--concurrency=1", "--prefetch-multiplier=1"]
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ../../Backend
+      dockerfile: Dockerfile
+      args: {ROLE: api, VARIANT: cpu}
+    environment: *api-env
+    volumes:
+      - ../../Backend/data:/app/data:ro
+      - ../../Backend/uploads:/app/uploads
+      - ../../Backend/shared-storage:/app/shared-storage
+      - hf-cache:/home/appuser/.cache/huggingface
+    depends_on:
+      redis: {condition: service_healthy}
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "beat", "--loglevel=INFO"]
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  hf-cache:

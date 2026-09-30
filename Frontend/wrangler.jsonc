@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "echo-frontend",
+  "main": "./worker.js",
+  "compatibility_date": "2026-09-30",
+  "compatibility_flags": ["allow_custom_ports"],
+  "vars": {
+    "API_ORIGIN": "http://ec2-13-222-131-47.compute-1.amazonaws.com:8000"
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*", "/audio/*"]
+  }
+}
