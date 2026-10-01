@@ -50,21 +50,22 @@ def k_queue(sid: str) -> str: return f"{k_sess(sid)}:queue"
 def k_meta(sid: str) -> str:  return f"{k_sess(sid)}:meta"
 def k_result(model: str, h: str) -> str: return f"result:{model}:{h}"
 
-async def _touch_session(sid: str) -> None:
+async def _touch_session(sid: str, *, persistent: bool = False) -> None:
     p = redis.pipeline()
     p.hsetnx(k_meta(sid), "created", "1")
-    p.expire(k_queue(sid), settings.SESSION_TTL_SECONDS)
-    p.expire(k_meta(sid), settings.SESSION_TTL_SECONDS)
+    if not persistent:
+        p.expire(k_queue(sid), settings.SESSION_TTL_SECONDS)
+        p.expire(k_meta(sid), settings.SESSION_TTL_SECONDS)
     await p.execute()
 
-async def ensure_session(sid: str | None) -> str:
+async def ensure_session(sid: str | None, *, persistent: bool = False) -> str:
     # Validate rather than trust: a malformed or absent cookie yields a fresh
     # session (the same outcome a first-time visitor already gets), never a
     # session keyed on attacker-chosen text. See `_VALID_SID`.
     if not sid or not _VALID_SID.match(sid):
         sid = uuid.uuid4().hex
     try:
-        await _touch_session(sid)
+        await _touch_session(sid, persistent=persistent)
     except ResponseError as exc:
         # A meta key of the wrong type fails HSETNX with WRONGTYPE on every
         # request, and the same pipeline refreshes its TTL, so the session
@@ -75,7 +76,7 @@ async def ensure_session(sid: str | None) -> str:
             raise
         logger.warning("Session %s has a key of the wrong type; issuing a new session", sid)
         sid = uuid.uuid4().hex
-        await _touch_session(sid)
+        await _touch_session(sid, persistent=persistent)
     return sid
 
 def _empty_queue() -> dict[str, Any]:

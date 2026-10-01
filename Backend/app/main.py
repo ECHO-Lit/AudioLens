@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 
 from .api.routes import (
+    auth as auth_routes,
     analyses as analyses_routes,
     dataset_management as dataset_management_routes,
     datasets as datasets_routes,
@@ -106,6 +107,7 @@ app.add_middleware(
 
 
 app.include_router(session_routes.router, tags=["Session"])
+app.include_router(auth_routes.router, tags=["Accounts"])
 app.include_router(upload_routes.router, tags=["Audio"])
 app.include_router(jobs_routes.router, tags=["Jobs"])
 app.include_router(models_routes.router, tags=["Custom Models"])

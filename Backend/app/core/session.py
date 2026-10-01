@@ -4,8 +4,9 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 from starlette.middleware.base import BaseHTTPMiddleware
+import json
 from .settings import settings
-from .redis import ensure_session
+from . import redis as redis_module
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +33,36 @@ class SessionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         cookie = request.cookies.get(settings.SESSION_COOKIE_NAME)
         try:
-            sid = await ensure_session(cookie)
+            token = request.cookies.get(settings.AUTH_COOKIE_NAME)
+            account_email = None
+            persistent = False
+            if token and len(token) == 64 and all(ch in "0123456789abcdef" for ch in token):
+                account_sid = await redis_module.redis.get(f"auth-token:{token}")
+                if account_sid:
+                    raw_account = await redis_module.redis.get(f"account:{account_sid}")
+                    if raw_account:
+                        try:
+                            account = json.loads(raw_account)
+                        except (json.JSONDecodeError, TypeError):
+                            account = None
+                        if isinstance(account, dict) and account.get("sid") == account_sid:
+                            cookie = account_sid
+                            account_email = account.get("email")
+                            persistent = True
+            # The compatibility sid cookie is not an account credential. If
+            # it names an account namespace but its separate auth token is
+            # absent, discard it instead of letting a logged-out browser fall
+            # back to the account's private workspace.
+            if not persistent and cookie and await redis_module.redis.exists(f"account:{cookie}"):
+                cookie = None
+            sid = await redis_module.ensure_session(cookie, persistent=persistent)
         except RedisError:
             # This middleware sits outside the app's exception handlers, so an
             # error here would otherwise become a bare 500.
             logger.warning("session store unavailable for %s %s", request.method, request.url.path)
             return service_unavailable()
         request.state.sid = sid
+        request.state.account_email = account_email
         resp: Response = await call_next(request)
         if sid != cookie:
             resp.set_cookie(

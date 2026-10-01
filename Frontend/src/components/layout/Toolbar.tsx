@@ -168,6 +168,9 @@ const onModelChange = (value: string) => {
           <Button asChild variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground">
             <Link to="/compare">Comparison Lab</Link>
           </Button>
+          <Button asChild variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground">
+            <Link to="/account">Account</Link>
+          </Button>
 
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">

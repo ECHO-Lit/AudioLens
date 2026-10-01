@@ -155,6 +155,26 @@ pytest
 ### Access the Application
 Open your browser and navigate to [http://localhost:8080](http://localhost:8080)
 
+### User accounts and private instances
+
+Open **Account** in the top toolbar to create an account with an email address
+and a password of at least 12 characters, or sign in on another browser/device.
+Each account gets a stable private namespace for its uploads, custom datasets,
+models, jobs, and saved analyses. Requests without an account continue to use
+the existing isolated browser session.
+
+Account identity persists in Redis, but individual audio and job records keep
+the configured `JOB_TTL_SECONDS` retention period; signing in does not extend
+that period.
+
+Accounts and password hashes are stored in Redis alongside session records;
+the password is never stored in plain text. Keep the Redis volume persistent
+to retain accounts. `docker compose down -v` deletes it and therefore removes
+accounts and their Redis metadata. For a public deployment, use HTTPS and the
+production cookie settings documented in `Backend/.env.example`; registration
+is open by default, so restrict it at the deployment edge if you need
+invite-only access.
+
 
 ## Project Structure
 

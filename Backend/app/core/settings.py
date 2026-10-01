@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/2"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/3"
     SESSION_COOKIE_NAME: str = "sid"
+    AUTH_COOKIE_NAME: str = "echo_auth"
+    AUTH_TTL_SECONDS: PositiveInt = 30 * 24 * 60 * 60
     SESSION_TTL_SECONDS: PositiveInt = 24 * 60 * 60
     JOB_TTL_SECONDS: PositiveInt = 24 * 60 * 60
     COOKIE_SECURE: bool = False

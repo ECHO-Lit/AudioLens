@@ -7,6 +7,7 @@ import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import JacobianLensLab from "./pages/JacobianLensLab";
 import ComparePage from "./pages/ComparePage";
+import Account from "./pages/Account";
 
 const queryClient = new QueryClient();
 
@@ -24,6 +25,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/j-lens" element={<JacobianLensLab />} />
             <Route path="/compare" element={<ComparePage />} />
+            <Route path="/account" element={<Account />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
