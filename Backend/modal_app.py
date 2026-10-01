@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+import time
 import wave
 
 import modal
@@ -47,6 +48,11 @@ def _infer(
     from app.core.device import detect_inference_runtime
 
     spec = RuntimeModelSpec.model_validate(model_spec_data) if model_spec_data else None
+    started_at = time.monotonic()
+    print(
+        f"ECHO_MODAL inference_started model={model} operation={operation} audio_bytes={len(audio_bytes)}",
+        flush=True,
+    )
     with tempfile.TemporaryDirectory(prefix="echo-modal-") as temp_dir:
         suffix = audio_suffix if audio_suffix.startswith(".") and len(audio_suffix) <= 12 else ".wav"
         audio_path = Path(temp_dir) / f"input{suffix}"
@@ -55,12 +61,138 @@ def _infer(
 
     model_cache.commit()
     runtime = detect_inference_runtime().as_dict()
+    print(
+        "ECHO_MODAL inference_completed "
+        f"model={model} operation={operation} device={runtime.get('device')} "
+        f"backend={runtime.get('backend')} duration_seconds={time.monotonic() - started_at:.3f}",
+        flush=True,
+    )
     # Return JSON text so Modal's pickle transport never requires torch on the
     # VPS or CLI that invoked this function.
     return json.dumps(
         {"result": result, "runtime": runtime, "model": model, "operation": operation},
         default=lambda value: value.tolist() if hasattr(value, "tolist") else str(value),
     )
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    volumes={MODEL_CACHE_PATH: model_cache},
+    timeout=3300,
+    max_containers=1,
+    scaledown_window=60,
+)
+def fit_jacobian_lens(
+    model: str,
+    model_spec_data,
+    samples: list[dict],
+    probe_count: int,
+    max_audio_seconds: float,
+):
+    """Fit a decoder lens on Modal; return the trusted torch artifact as bytes."""
+    import tempfile
+    from pathlib import Path
+
+    import torch
+    from app.schemas.jobs import RuntimeModelSpec
+    from app.services.jacobian_lens_service import fit_decoder_jacobian_lens
+    from app.worker.model_adapters import get_model_adapter
+    from app.worker.model_registry import model_registry
+
+    spec = RuntimeModelSpec.model_validate(model_spec_data) if model_spec_data else None
+    started_at = time.monotonic()
+    print(f"ECHO_MODAL jacobian_lens_fit_started model={model} samples={len(samples)}", flush=True)
+    with tempfile.TemporaryDirectory(prefix="echo-modal-jlens-") as temp_dir:
+        sample_paths = []
+        for index, sample in enumerate(samples):
+            suffix = sample["suffix"] if sample["suffix"].startswith(".") else ".wav"
+            path = Path(temp_dir) / f"sample-{index}{suffix}"
+            path.write_bytes(sample["audio_bytes"])
+            sample_paths.append((str(path), sample["transcript"]))
+        adapter = get_model_adapter(model, spec)
+        resource = model_registry.prepare(adapter, "jacobian_lens_fit")
+        artifact = fit_decoder_jacobian_lens(
+            adapter,
+            resource,
+            sample_paths,
+            probe_count=int(probe_count),
+            max_audio_seconds=float(max_audio_seconds),
+        )
+        artifact_path = Path(temp_dir) / "lens.pt"
+        torch.save(artifact, artifact_path)
+        artifact_bytes = artifact_path.read_bytes()
+    model_cache.commit()
+    print(
+        f"ECHO_MODAL jacobian_lens_fit_completed model={model} device=cuda "
+        f"duration_seconds={time.monotonic() - started_at:.3f}",
+        flush=True,
+    )
+    return artifact_bytes
+
+
+@app.function(
+    image=image,
+    gpu="A10G",
+    volumes={MODEL_CACHE_PATH: model_cache},
+    timeout=3300,
+    max_containers=1,
+    scaledown_window=60,
+)
+def apply_jacobian_lens(
+    model: str,
+    model_spec_data,
+    audio_bytes: bytes,
+    audio_suffix: str,
+    artifact_bytes: bytes,
+    top_k: int,
+    transcript: str | None = None,
+    max_new_tokens: int = 64,
+):
+    """Apply an existing decoder lens on Modal and return JSON-safe output."""
+    import io
+    import tempfile
+    from pathlib import Path
+
+    import torch
+    from app.schemas.jobs import RuntimeModelSpec
+    from app.services.jacobian_lens_service import apply_decoder_jacobian_lens
+    from app.worker.executor import _jsonable
+    from app.worker.model_adapters import get_model_adapter
+    from app.worker.model_registry import model_registry
+
+    spec = RuntimeModelSpec.model_validate(model_spec_data) if model_spec_data else None
+    started_at = time.monotonic()
+    print(
+        f"ECHO_MODAL jacobian_lens_apply_started model={model} audio_bytes={len(audio_bytes)}",
+        flush=True,
+    )
+    with tempfile.TemporaryDirectory(prefix="echo-modal-jlens-apply-") as temp_dir:
+        suffix = audio_suffix if audio_suffix.startswith(".") and len(audio_suffix) <= 12 else ".wav"
+        audio_path = Path(temp_dir) / f"input{suffix}"
+        audio_path.write_bytes(audio_bytes)
+        artifact = torch.load(io.BytesIO(artifact_bytes), map_location="cpu", weights_only=True)
+        adapter = get_model_adapter(model, spec)
+        resource = model_registry.prepare(adapter, "jacobian_lens_apply")
+        result = apply_decoder_jacobian_lens(
+            adapter,
+            resource,
+            artifact,
+            str(audio_path),
+            top_k=int(top_k),
+            transcript=transcript,
+            max_new_tokens=int(max_new_tokens),
+        )
+    model_cache.commit()
+    from app.core.device import detect_inference_runtime
+
+    runtime = detect_inference_runtime().as_dict()
+    print(
+        f"ECHO_MODAL jacobian_lens_apply_completed model={model} "
+        f"device={runtime.get('device')} duration_seconds={time.monotonic() - started_at:.3f}",
+        flush=True,
+    )
+    return json.dumps({"result": _jsonable(result), "runtime": runtime}, ensure_ascii=False)
 
 
 @app.function(

@@ -378,6 +378,8 @@ def _execute_one(
         raise ValueError(f"{operation} requires a model")
     if settings.INFERENCE_BACKEND == "modal":
         return _execute_one_modal(operation, model, audio_path, parameters, model_spec)
+    if settings.is_production:
+        raise RuntimeError("Production model inference must be routed through Modal")
     from app.worker.model_adapters import get_model_adapter
     from app.worker.model_registry import model_registry
 
@@ -388,7 +390,7 @@ def _execute_one(
     return adapter.execute(operation, str(audio_path), parameters, resource)
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=4)
 def _modal_inference_function(function_name: str):
     """Resolve the deployed Modal function once per Celery worker process."""
     import modal
@@ -427,6 +429,34 @@ def _execute_one_modal(
     return response["result"]
 
 
+def _fit_jacobian_lens_on_modal(envelope: TaskEnvelope, samples: list[dict[str, Any]]) -> bytes:
+    spec_payload = envelope.model_spec.model_dump(mode="json") if envelope.model_spec else None
+    return _modal_inference_function("fit_jacobian_lens").remote(
+        envelope.model or "",
+        spec_payload,
+        samples,
+        int(envelope.parameters["probe_count"]),
+        float(envelope.parameters["max_audio_seconds"]),
+    )
+
+
+def _apply_jacobian_lens_on_modal(
+    envelope: TaskEnvelope, audio_path: Path, artifact_bytes: bytes
+) -> dict[str, Any]:
+    spec_payload = envelope.model_spec.model_dump(mode="json") if envelope.model_spec else None
+    response = _modal_inference_function("apply_jacobian_lens").remote(
+        envelope.model or "",
+        spec_payload,
+        audio_path.read_bytes(),
+        audio_path.suffix or ".wav",
+        artifact_bytes,
+        int(envelope.parameters["top_k"]),
+        envelope.parameters.get("transcript"),
+        int(envelope.parameters.get("max_new_tokens", 64)),
+    )
+    return json.loads(response)["result"]
+
+
 def _load_torch_artifact(storage: ObjectStorage, key: str, destination: Path) -> dict[str, Any]:
     """Load an artifact ECHO created itself; user-controlled pickle data is never read."""
     import torch
@@ -441,13 +471,11 @@ def _load_torch_artifact(storage: ObjectStorage, key: str, destination: Path) ->
 async def _execute_jacobian_lens_fit(
     envelope: TaskEnvelope, storage: ObjectStorage, temp_root: Path
 ) -> dict[str, Any]:
+    import io
     import torch
 
     from app.repositories.jacobian_lenses import JacobianLensRepository
     from app.schemas.jacobian_lens import JacobianLensStatus
-    from app.services.jacobian_lens_service import fit_decoder_jacobian_lens
-    from app.worker.model_adapters import get_model_adapter
-    from app.worker.model_registry import model_registry
 
     lens_id = envelope.parameters["lens_id"]
     repository = JacobianLensRepository()
@@ -455,42 +483,20 @@ async def _execute_jacobian_lens_fit(
     if not record:
         raise ValueError("Jacobian lens record no longer exists")
     transcripts = {sample["audio_id"]: sample["transcript"] for sample in envelope.parameters["samples"]}
-    samples = []
+    samples: list[dict[str, Any]] = []
     for asset in envelope.audio:
         transcript = transcripts.get(asset.audio_id)
         if not transcript:
             raise ValueError(f"Missing transcript for lens sample {asset.audio_id}")
         local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
         storage.download_file(asset.object_key, local_path)
-        samples.append((str(local_path), transcript))
-    adapter = get_model_adapter(envelope.model or "", envelope.model_spec)
-    resource = model_registry.prepare(adapter, "jacobian_lens_fit")
-    job_repository = JobRepository()
-    event_loop = asyncio.get_running_loop()
-
-    def on_sample(completed: int, total: int) -> None:
-        """Persist sample progress from the CPU-bound fitting thread."""
-        update = job_repository.update(
-            envelope.job_id,
-            progress=JobProgress(
-                current=completed,
-                total=total,
-                message=f"Fitting decoder Jacobian lenses ({completed}/{total})",
-            ),
-        )
-        asyncio.run_coroutine_threadsafe(update, event_loop).result()
-
-    # Fitting is CPU-bound. Keeping it in a worker thread lets the event loop
-    # publish progress after each fitted or held-out sample.
-    artifact = await asyncio.to_thread(
-        fit_decoder_jacobian_lens,
-        adapter,
-        resource,
-        samples,
-        probe_count=int(envelope.parameters["probe_count"]),
-        max_audio_seconds=float(envelope.parameters["max_audio_seconds"]),
-        on_sample=on_sample,
-    )
+        samples.append({
+            "audio_bytes": local_path.read_bytes(),
+            "suffix": local_path.suffix,
+            "transcript": transcript,
+        })
+    artifact_bytes = await asyncio.to_thread(_fit_jacobian_lens_on_modal, envelope, samples)
+    artifact = torch.load(io.BytesIO(artifact_bytes), map_location="cpu", weights_only=True)
     artifact_key = f"jacobian-lenses/{envelope.session_id}/{lens_id}/lens.pt"
     metadata_key = f"jacobian-lenses/{envelope.session_id}/{lens_id}/metadata.json"
     artifact_path = temp_root / "lens.pt"
@@ -517,24 +523,21 @@ async def _execute_jacobian_lens_fit(
 async def _execute_jacobian_lens_apply(
     envelope: TaskEnvelope, storage: ObjectStorage, audio_path: Path, temp_root: Path
 ) -> dict[str, Any]:
+    import io
+    import torch
+
     from app.repositories.jacobian_lenses import JacobianLensRepository
     from app.schemas.jacobian_lens import JacobianLensStatus
-    from app.services.jacobian_lens_service import apply_decoder_jacobian_lens
-    from app.worker.model_adapters import get_model_adapter
-    from app.worker.model_registry import model_registry
 
     lens_id = envelope.parameters["lens_id"]
     record = await JacobianLensRepository().get_owned(lens_id, envelope.session_id)
     if not record or record.status != JacobianLensStatus.READY or not record.artifact_key:
         raise ValueError("Jacobian lens is not available")
     artifact = _load_torch_artifact(storage, record.artifact_key, temp_root / "lens.pt")
-    adapter = get_model_adapter(envelope.model or "", envelope.model_spec)
-    resource = model_registry.prepare(adapter, "jacobian_lens_apply")
-    output = apply_decoder_jacobian_lens(
-        adapter, resource, artifact, str(audio_path),
-        top_k=int(envelope.parameters["top_k"]),
-        transcript=envelope.parameters.get("transcript"),
-        max_new_tokens=int(envelope.parameters.get("max_new_tokens", 64)),
+    artifact_buffer = io.BytesIO()
+    torch.save(artifact, artifact_buffer)
+    output = await asyncio.to_thread(
+        _apply_jacobian_lens_on_modal, envelope, audio_path, artifact_buffer.getvalue()
     )
     return {"lens_id": lens_id, **output}
 
