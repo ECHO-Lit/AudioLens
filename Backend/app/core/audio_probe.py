@@ -17,14 +17,34 @@ def _probe_with_soundfile(path: Path) -> tuple[float, int | None, int | None] | 
     return float(info.duration), int(info.samplerate), int(info.channels)
 
 
+def _probe_with_tinytag(path: Path) -> tuple[float, int | None, int | None] | None:
+    """Read common audio metadata without requiring an ffprobe executable.
+
+    The API image deliberately omits ffmpeg. TinyTag handles containers such
+    as M4A/MP4 in pure Python, while soundfile remains the fast path for WAV,
+    FLAC and formats supported by libsndfile.
+    """
+    try:
+        from tinytag import TinyTag
+
+        info = TinyTag.get(str(path))
+    except Exception:
+        return None
+    if info is None or not info.duration or info.duration <= 0:
+        return None
+    sample_rate = int(info.samplerate) if info.samplerate else None
+    channels = int(info.channels) if info.channels else None
+    return float(info.duration), sample_rate, channels
+
+
 def probe_audio(path: Path) -> tuple[float, int | None, int | None]:
     # libsndfile reads the header in-process (~1 ms) and covers WAV, FLAC, OGG
-    # and MP3. ffprobe is a process spawn (~80 ms on the development host) and
-    # is only needed for containers libsndfile cannot open, such as M4A. It ran
-    # first for every upload, which made probing the dominant cost of an upload
-    # acknowledgment under a burst of concurrent uploads. The API image ships
-    # without ffmpeg, so production already took the libsndfile path.
+    # and MP3. For containers libsndfile cannot open, TinyTag handles metadata
+    # in-process; ffprobe remains a final compatibility fallback when present.
     probed = _probe_with_soundfile(path)
+    if probed is not None:
+        return probed
+    probed = _probe_with_tinytag(path)
     if probed is not None:
         return probed
     command = [

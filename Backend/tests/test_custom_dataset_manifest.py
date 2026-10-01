@@ -3,13 +3,35 @@ from __future__ import annotations
 import pytest
 
 
+def _flac_bytes() -> bytes:
+    import io
+
+    import numpy as np
+    import soundfile as sf
+
+    buffer = io.BytesIO()
+    sf.write(buffer, np.zeros(8000, dtype=np.float32), 16_000, format="FLAC")
+    return buffer.getvalue()
+
+
+def _wav_bytes() -> bytes:
+    import io
+
+    import numpy as np
+    import soundfile as sf
+
+    buffer = io.BytesIO()
+    sf.write(buffer, np.zeros(8000, dtype=np.float32), 16_000, format="WAV")
+    return buffer.getvalue()
+
+
 def test_manifest_exposes_only_matched_transcript_pairs(tmp_path, monkeypatch):
     from app.services import custom_dataset_service as datasets
 
     monkeypatch.setattr(datasets, "SESSIONS_BASE_DIR", tmp_path / "sessions")
     manager = datasets.CustomDatasetManager("session-a")
     manager.create_dataset("speech")
-    manager.add_file_to_dataset("speech", "clip-001.wav", b"not-a-real-wave")
+    manager.add_file_to_dataset("speech", "clip-001.wav", _wav_bytes())
 
     result = manager.add_manifest_to_dataset(
         "speech",
@@ -40,7 +62,7 @@ async def test_upload_accepts_octet_stream_audio(client):
     """Browsers label .flac/.m4a as application/octet-stream; /upload accepts it
     and the dataset-files route must not reject it (regression: the reference
     all-FLAC dataset could never upload)."""
-    payload = b"fake-flac-bytes"
+    payload = _flac_bytes()
     response = await client.post(
         "/upload/dataset/create",
         data={"dataset_name": "flac-set"},
@@ -55,6 +77,17 @@ async def test_upload_accepts_octet_stream_audio(client):
     body = response.json()
     assert body["total_files"] == 1
     assert body["uploaded_files"][0]["filename"] == "1673-143396-0000.flac"
+
+
+async def test_upload_rejects_undecodable_supported_extension(client):
+    await client.post("/upload/dataset/create", data={"dataset_name": "invalid-audio"})
+    response = await client.post(
+        "/upload/dataset/invalid-audio/files",
+        files=[("files", ("broken.m4a", b"not audio", "application/octet-stream"))],
+    )
+    assert response.status_code == 207
+    assert response.json()["total_files"] == 0
+    assert "not decodable audio" in response.json()["errors"][0]
 
 
 async def test_upload_still_rejects_non_audio(client):
