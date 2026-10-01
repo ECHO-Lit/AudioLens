@@ -38,7 +38,7 @@ def _verify_password(password: str, encoded: str) -> bool:
 
 def _cookie(response: Response, token: str) -> None:
     response.set_cookie(
-        settings.AUTH_COOKIE_NAME, token, max_age=settings.AUTH_TTL_SECONDS,
+        settings.AUTH_COOKIE_NAME, token,
         httponly=True, secure=settings.COOKIE_SECURE,
         samesite=settings.COOKIE_SAMESITE, domain=settings.COOKIE_DOMAIN, path="/",
     )
@@ -46,15 +46,20 @@ def _cookie(response: Response, token: str) -> None:
 
 async def _create_login(response: Response, account: dict) -> None:
     token = secrets.token_hex(32)
+    # User credentials identify the person; the session namespace identifies
+    # this login. A second browser/login therefore gets a clean, separate ECHO
+    # workspace even when it belongs to the same account.
+    sid = uuid.uuid4().hex
     await redis_module.redis.set(
-        f"auth-token:{token}", account["sid"], ex=settings.AUTH_TTL_SECONDS
+        f"auth-token:{token}", json.dumps({"sid": sid, "email": account["email"]}),
+        ex=settings.AUTH_TTL_SECONDS,
+    )
+    await redis_module.redis.set(
+        f"auth-session:{sid}", "1", ex=settings.SESSION_TTL_SECONDS
     )
     _cookie(response, token)
-    # Kept for existing clients; authenticated middleware trusts the auth
-    # token's namespace over this compatibility cookie.
     response.set_cookie(
-        settings.SESSION_COOKIE_NAME, account["sid"],
-        max_age=settings.AUTH_TTL_SECONDS, httponly=True,
+        settings.SESSION_COOKIE_NAME, sid, httponly=True,
         secure=settings.COOKIE_SECURE, samesite=settings.COOKIE_SAMESITE,
         domain=settings.COOKIE_DOMAIN, path="/",
     )
@@ -69,11 +74,11 @@ async def register(payload: dict = Body(...)):
     if not isinstance(password, str) or len(password) < 12 or len(password) > 1024:
         return JSONResponse({"detail": "Password must be between 12 and 1024 characters."}, status_code=422)
 
-    sid = uuid.uuid4().hex
-    account = {"email": email, "sid": sid, "password_hash": _hash_password(password)}
-    user_key = f"account:{sid}"
+    user_id = uuid.uuid4().hex
+    account = {"email": email, "user_id": user_id, "password_hash": _hash_password(password)}
+    user_key = f"account:{user_id}"
     email_key = f"account-email:{_email_key(email)}"
-    created = await redis_module.redis.set(email_key, sid, nx=True)
+    created = await redis_module.redis.set(email_key, user_id, nx=True)
     if not created:
         return JSONResponse({"detail": "An account with that email already exists."}, status_code=409)
     await redis_module.redis.set(user_key, json.dumps(account))
@@ -86,8 +91,8 @@ async def register(payload: dict = Body(...)):
 async def login(payload: dict = Body(...)):
     email = str(payload.get("email", "")).strip().lower()
     password = payload.get("password")
-    sid = await redis_module.redis.get(f"account-email:{_email_key(email)}") if _EMAIL.fullmatch(email) else None
-    raw = await redis_module.redis.get(f"account:{sid}") if sid else None
+    user_id = await redis_module.redis.get(f"account-email:{_email_key(email)}") if _EMAIL.fullmatch(email) else None
+    raw = await redis_module.redis.get(f"account:{user_id}") if user_id else None
     account = json.loads(raw) if raw else None
     if not account or not isinstance(password, str) or not _verify_password(password, account["password_hash"]):
         return JSONResponse({"detail": "Email or password is incorrect."}, status_code=401)
@@ -105,8 +110,12 @@ async def me(request: Request):
 @router.post("/auth/logout")
 async def logout(request: Request, response: Response):
     token = request.cookies.get(settings.AUTH_COOKIE_NAME)
+    from ...services.session_lifecycle import end_session
+
+    await end_session(request.state.sid)
     if token:
         await redis_module.redis.delete(f"auth-token:{token}")
+    await redis_module.redis.delete(f"auth-session:{request.state.sid}")
     response.delete_cookie(settings.AUTH_COOKIE_NAME, path="/", domain=settings.COOKIE_DOMAIN)
     # Rotate the legacy cookie so logout falls back to a fresh anonymous space.
     response.delete_cookie(settings.SESSION_COOKIE_NAME, path="/", domain=settings.COOKIE_DOMAIN)

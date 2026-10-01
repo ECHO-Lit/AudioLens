@@ -82,6 +82,10 @@ class ObjectStorage(ABC):
     @abstractmethod
     def exists(self, key: str) -> bool: ...
 
+    def delete_prefix(self, prefix: str) -> None:
+        """Delete every object below a validated namespace prefix."""
+        raise NotImplementedError
+
     def put_json(self, key: str, value: Any) -> None:
         import tempfile
 
@@ -145,6 +149,10 @@ class LocalObjectStorage(ObjectStorage):
     def exists(self, key: str) -> bool:
         return self.path_for(key).is_file()
 
+    def delete_prefix(self, prefix: str) -> None:
+        directory = self.path_for(f"{prefix.rstrip('/')}/.prefix-marker").parent
+        shutil.rmtree(directory, ignore_errors=True)
+
 
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
 
@@ -206,6 +214,27 @@ class S3ObjectStorage(ObjectStorage):
 
     def delete(self, key: str) -> None:
         self._call(lambda: self.client.delete_object(Bucket=self.bucket, Key=_safe_key(key)))
+
+    def delete_prefix(self, prefix: str) -> None:
+        safe_prefix = _safe_key(prefix.rstrip("/")) + "/"
+
+        def remove() -> None:
+            paginator = self.client.get_paginator("list_objects_v2")
+            batch: list[dict[str, str]] = []
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=safe_prefix):
+                for entry in page.get("Contents", []):
+                    batch.append({"Key": entry["Key"]})
+                    if len(batch) == 1000:
+                        result = self.client.delete_objects(Bucket=self.bucket, Delete={"Objects": batch})
+                        if result.get("Errors"):
+                            raise StorageUnavailable("S3 could not delete every object in the session")
+                        batch = []
+            if batch:
+                result = self.client.delete_objects(Bucket=self.bucket, Delete={"Objects": batch})
+                if result.get("Errors"):
+                    raise StorageUnavailable("S3 could not delete every object in the session")
+
+        self._call(remove)
 
     def exists(self, key: str) -> bool:
         # Only "no such object" is an answer; a failure to ask is not.  Until

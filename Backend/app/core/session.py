@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 from starlette.middleware.base import BaseHTTPMiddleware
 import json
+import uuid
 from .settings import settings
 from . import redis as redis_module
 
@@ -35,27 +36,51 @@ class SessionMiddleware(BaseHTTPMiddleware):
         try:
             token = request.cookies.get(settings.AUTH_COOKIE_NAME)
             account_email = None
-            persistent = False
+            authenticated = False
             if token and len(token) == 64 and all(ch in "0123456789abcdef" for ch in token):
-                account_sid = await redis_module.redis.get(f"auth-token:{token}")
-                if account_sid:
-                    raw_account = await redis_module.redis.get(f"account:{account_sid}")
-                    if raw_account:
-                        try:
-                            account = json.loads(raw_account)
-                        except (json.JSONDecodeError, TypeError):
-                            account = None
-                        if isinstance(account, dict) and account.get("sid") == account_sid:
-                            cookie = account_sid
-                            account_email = account.get("email")
-                            persistent = True
-            # The compatibility sid cookie is not an account credential. If
-            # it names an account namespace but its separate auth token is
-            # absent, discard it instead of letting a logged-out browser fall
-            # back to the account's private workspace.
-            if not persistent and cookie and await redis_module.redis.exists(f"account:{cookie}"):
+                mapped = await redis_module.redis.get(f"auth-token:{token}")
+                if mapped:
+                    try:
+                        auth_session = json.loads(mapped)
+                    except (json.JSONDecodeError, TypeError):
+                        auth_session = None
+                    if isinstance(auth_session, dict):
+                        auth_sid = auth_session.get("sid")
+                        account_email = auth_session.get("email")
+                        if isinstance(auth_sid, str) and len(auth_sid) == 32:
+                            cookie = auth_sid
+                            authenticated = True
+                    else:
+                        # Compatibility with tokens created before sessions
+                        # were changed from account-scoped to login-scoped.
+                        raw_account = await redis_module.redis.get(f"account:{mapped}")
+                        if raw_account:
+                            old_account = json.loads(raw_account)
+                            if isinstance(old_account, dict):
+                                # Upgrade pre-change account-wide logins to a
+                                # fresh namespace for this login token.
+                                cookie = uuid.uuid4().hex
+                                account_email = old_account.get("email")
+                                authenticated = True
+                                remaining = await redis_module.redis.ttl(f"auth-token:{token}")
+                                await redis_module.redis.set(
+                                    f"auth-token:{token}",
+                                    json.dumps({"sid": cookie, "email": account_email}),
+                                    ex=remaining if remaining > 0 else settings.AUTH_TTL_SECONDS,
+                                )
+            if authenticated:
+                await redis_module.redis.set(
+                    f"auth-session:{cookie}", "1", ex=settings.SESSION_TTL_SECONDS
+                )
+            # A sid cookie is only an identifier. Once its authenticated
+            # session token is gone, never fall back to that former private
+            # namespace as an anonymous session.
+            if not authenticated and cookie and (
+                await redis_module.redis.exists(f"auth-session:{cookie}")
+                or await redis_module.redis.exists(f"account:{cookie}")
+            ):
                 cookie = None
-            sid = await redis_module.ensure_session(cookie, persistent=persistent)
+            sid = await redis_module.ensure_session(cookie)
         except RedisError:
             # This middleware sits outside the app's exception handlers, so an
             # error here would otherwise become a bare 500.
@@ -63,11 +88,11 @@ class SessionMiddleware(BaseHTTPMiddleware):
             return service_unavailable()
         request.state.sid = sid
         request.state.account_email = account_email
+        request.state.authenticated = authenticated
         resp: Response = await call_next(request)
-        if sid != cookie:
+        if sid != request.cookies.get(settings.SESSION_COOKIE_NAME):
             resp.set_cookie(
                 settings.SESSION_COOKIE_NAME, sid,
-                max_age=settings.SESSION_TTL_SECONDS,
                 httponly=True, secure=settings.COOKIE_SECURE,
                 samesite=settings.COOKIE_SAMESITE, domain=settings.COOKIE_DOMAIN, path="/",
             )

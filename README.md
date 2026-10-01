@@ -158,14 +158,19 @@ Open your browser and navigate to [http://localhost:8080](http://localhost:8080)
 ### User accounts and private instances
 
 Open **Account** in the top toolbar to create an account with an email address
-and a password of at least 12 characters, or sign in on another browser/device.
-Each account gets a stable private namespace for its uploads, custom datasets,
-models, jobs, and saved analyses. Requests without an account continue to use
-the existing isolated browser session.
+and a password of at least 12 characters, or sign in. The public app URL stays
+the same for everyone; each browser session and each login gets a fresh private
+namespace for uploads, custom datasets, models, jobs, and saved analyses. A
+second login, including from another device, does not share the first login's
+workspace. Anonymous browser sessions remain isolated too.
 
-Account identity persists in Redis, but individual audio and job records keep
-the configured `JOB_TTL_SECONDS` retention period; signing in does not extend
-that period.
+Use **End session and erase data** on the Account page to immediately remove
+that session's uploaded and generated files, datasets, queued work, and saved
+analysis records. Browser session cookies expire when the browser session ends;
+if the browser closes without an explicit end-session request, server-side
+expiry cleanup removes the remaining session data according to the configured
+retention schedule. The account credentials remain so the user can sign in
+again to a new, empty session.
 
 Accounts and password hashes are stored in Redis alongside session records;
 the password is never stored in plain text. Keep the Redis volume persistent

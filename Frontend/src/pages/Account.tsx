@@ -39,8 +39,23 @@ export default function Account() {
   };
 
   const signOut = async () => {
-    await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" });
+    const response = await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      setError(body.detail || "Could not end this session. Your data was not cleared.");
+      return;
+    }
     setInfo({ authenticated: false, email: null });
+  };
+
+  const endAnonymousSession = async () => {
+    const response = await fetch(`${API_BASE}/session/end`, { method: "POST", credentials: "include" });
+    if (response.ok) {
+      setError("This session ended and its uploaded data was deleted. Reload to start a clean session.");
+    } else {
+      const body = await response.json().catch(() => ({}));
+      setError(body.detail || "Could not end this session. Your data was not cleared.");
+    }
   };
 
   return <main className="mx-auto max-w-lg p-8">
@@ -48,10 +63,11 @@ export default function Account() {
     <h1 className="mt-6 text-2xl font-semibold">Your account</h1>
     {info.authenticated ? <section className="mt-6 space-y-4">
       <p>Signed in as <strong>{info.email}</strong>.</p>
-      <p className="text-sm text-muted-foreground">Your account uses a private ECHO workspace across browsers and devices. Individual uploads and jobs still follow the deployment’s configured retention period.</p>
-      <Button onClick={() => void signOut()}>Sign out</Button>
+      <p className="text-sm text-muted-foreground">This login has a private session. Other browsers and logins get separate empty sessions. Ending this session deletes its uploads, datasets, jobs, and saved analyses.</p>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <Button onClick={() => void signOut()}>End session and sign out</Button>
     </section> : <>
-      <p className="mt-2 text-sm text-muted-foreground">Create an account to keep your private ECHO instance available across browsers and devices.</p>
+      <p className="mt-2 text-sm text-muted-foreground">Each browser session has its own private workspace. Create an account to sign in, but each new login starts with a clean session.</p>
       <div className="mt-6 flex gap-2">
         <Button type="button" variant={mode === "register" ? "default" : "outline"} onClick={() => setMode("register")}>Create account</Button>
         <Button type="button" variant={mode === "login" ? "default" : "outline"} onClick={() => setMode("login")}>Sign in</Button>
@@ -62,6 +78,10 @@ export default function Account() {
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <Button type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "register" ? "Create account" : "Sign in"}</Button>
       </form>
+      <div className="mt-8 border-t pt-5">
+        <p className="mb-3 text-sm text-muted-foreground">End the current browser session and immediately erase its uploaded data.</p>
+        <Button type="button" variant="outline" onClick={() => void endAnonymousSession()}>End session and erase data</Button>
+      </div>
     </>}
   </main>;
 }
