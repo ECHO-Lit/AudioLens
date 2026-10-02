@@ -503,10 +503,7 @@ async def serve_dataset_file(
             media_type=media_type,
             headers={
                 'Accept-Ranges': 'bytes',
-                'Cache-Control': 'public, max-age=3600',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-                'Access-Control-Allow-Headers': 'Range, Accept-Encoding',
+                'Cache-Control': 'private, no-store',
                 'Content-Disposition': f'inline; filename="{filename}"'
             }
         )

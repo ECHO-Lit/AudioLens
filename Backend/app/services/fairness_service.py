@@ -731,15 +731,14 @@ async def _advance_fr10_stage(job_id: str, counter: str, member: str, message: s
 
 def _run_op(model: str | None, model_spec: Any, operation: str, audio_path: str, parameters: dict[str, Any]) -> Any:
     from app.worker.model_adapters import get_model_adapter
-    from app.worker.model_registry import model_registry
+    from app.worker.executor import _execute_one
 
     if not model:
         return None
     adapter = get_model_adapter(model, model_spec)
     if not adapter.supports(operation):
         return None
-    resource = model_registry.prepare(adapter, operation)
-    return adapter.execute(operation, audio_path, parameters, resource)
+    return _execute_one(operation, model, Path(audio_path), parameters, model_spec)
 
 
 def _extract_text(output: Any) -> str:

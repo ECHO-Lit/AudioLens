@@ -319,13 +319,12 @@ def _variant_item_cache_key(envelope: TaskEnvelope, variant_sha256: str) -> str:
 
 def _run_prediction(model: str, model_spec: Any, audio_path: str) -> Any:
     from app.worker.model_adapters import get_model_adapter
-    from app.worker.model_registry import model_registry
+    from app.worker.executor import _execute_one
 
     adapter = get_model_adapter(model, model_spec)
     if not adapter.supports("prediction"):
         raise ValueError(f"{model} does not support prediction")
-    resource = model_registry.prepare(adapter, "prediction")
-    return adapter.execute("prediction", audio_path, {}, resource)
+    return _execute_one("prediction", model, Path(audio_path), {}, model_spec)
 
 
 async def infer_variant(

@@ -147,9 +147,8 @@ class CustomDatasetManager:
         try:
             duration, sample_rate, _ = probe_audio(file_path)
         except Exception as e:
-            logger.warning(f"Could not extract audio metadata for {filename}: {e}")
-            duration = 0.0
-            sample_rate = 0
+            file_path.unlink(missing_ok=True)
+            raise ValueError(f"{filename} is not decodable audio") from e
         # PE-3 / FR-1: the same 10 minute cap POST /upload enforces.
         if duration > settings.MAX_AUDIO_DURATION_SECONDS:
             file_path.unlink(missing_ok=True)

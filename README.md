@@ -176,6 +176,31 @@ and L2-ARCTIC are non-commercial only; Common Voice is CC0; LibriSpeech is CC BY
 ### Access the Application
 Open your browser and navigate to [http://localhost:8080](http://localhost:8080)
 
+### User accounts and private instances
+
+Open **Account** in the top toolbar to create an account with an email address
+and a password of at least 12 characters, or sign in. The public app URL stays
+the same for everyone; each browser session and each login gets a fresh private
+namespace for uploads, custom datasets, models, jobs, and saved analyses. A
+second login, including from another device, does not share the first login's
+workspace. Anonymous browser sessions remain isolated too.
+
+Use **End session and erase data** on the Account page to immediately remove
+that session's uploaded and generated files, datasets, queued work, and saved
+analysis records. Browser session cookies expire when the browser session ends;
+if the browser closes without an explicit end-session request, server-side
+expiry cleanup removes the remaining session data according to the configured
+retention schedule. The account credentials remain so the user can sign in
+again to a new, empty session.
+
+Accounts and password hashes are stored in Redis alongside session records;
+the password is never stored in plain text. Keep the Redis volume persistent
+to retain accounts. `docker compose down -v` deletes it and therefore removes
+accounts and their Redis metadata. For a public deployment, use HTTPS and the
+production cookie settings documented in `Backend/.env.example`; registration
+is open by default, so restrict it at the deployment edge if you need
+invite-only access.
+
 
 ## Project Structure
 
