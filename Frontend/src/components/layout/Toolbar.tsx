@@ -10,7 +10,6 @@ import {
   SelectGroup,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { Upload, HelpCircle, PanelLeft, PanelBottom, PanelRight } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -157,10 +156,7 @@ const onModelChange = (value: string) => {
         {/* Left side: Model and Dataset selectors */}
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2.5">
-            <span className="text-base font-bold text-foreground">LIT for Voice</span>
-            <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
-              v1.0
-            </Badge>
+            <span className="text-base font-bold text-foreground">AudioLens</span>
           </div>
           <Button asChild variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground">
             <Link to="/j-lens">J-Lens Lab</Link>
