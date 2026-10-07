@@ -58,11 +58,13 @@ interface CustomDataset {
 interface CustomDatasetManagerProps {
   onDatasetCreated?: (datasetName: string) => void;
   onDatasetSelected?: (datasetName: string) => void;
+  onDatasetUpdated?: (datasetName: string) => void;
 }
 
 export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
   onDatasetCreated,
-  onDatasetSelected
+  onDatasetSelected,
+  onDatasetUpdated
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("list");
@@ -180,6 +182,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       status: 'pending' as const,
     }]));
     setUploadStatus(Array.from(statusMap.values()));
+    let updatedDatasetName: string | null = null;
 
     try {
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
@@ -192,6 +195,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
         // the bar shows real transfer progress (BUG-45, completing 3.1.3's
         // BUG-22). Batches already sent count as whole.
         const data = await uploadWithProgress<{
+          dataset_name?: string;
           uploaded_files?: Array<{ original_filename: string }>;
           errors?: string[];
         }>(
@@ -214,6 +218,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
           const hasError = (data.errors || []).some((error: string) => error.includes(file.name));
           const uploaded = (data.uploaded_files || []).some((f) => f.original_filename === file.name);
           entry.status = hasError ? 'error' : uploaded ? 'success' : 'error';
+          if (uploaded) updatedDatasetName = data.dataset_name || updatedDatasetName;
           entry.error = hasError ? (data.errors || []).find((error: string) => error.includes(file.name)) : undefined;
         });
         setUploadStatus(Array.from(statusMap.values()));
@@ -225,6 +230,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       if (audioInput) audioInput.value = '';
 
       await fetchDatasets(); // Refresh the list
+      if (updatedDatasetName) onDatasetUpdated?.(updatedDatasetName);
 
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload files');
@@ -236,6 +242,10 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
         status: item.status === 'success' ? 'success' : 'error',
         error: item.error ?? (err instanceof Error ? err.message : 'Upload failed'),
       })));
+      if (updatedDatasetName) {
+        await fetchDatasets();
+        onDatasetUpdated?.(updatedDatasetName);
+      }
     } finally {
       setUploadLoading(false);
     }
@@ -268,6 +278,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       const manifestInput = document.getElementById('manifest-input') as HTMLInputElement | null;
       if (manifestInput) manifestInput.value = '';
       await fetchDatasets();
+      onDatasetUpdated?.(data.dataset_name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload manifest');
     } finally {

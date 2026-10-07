@@ -66,6 +66,7 @@ export default function JacobianLensLab() {
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
   const [model, setModel] = useState("whisper-base");
   const [dataset, setDataset] = useState("common-voice");
+  const [datasetRevision, setDatasetRevision] = useState(0);
   const [rows, setRows] = useState<DatasetRow[]>([]);
   const [selectedFilenames, setSelectedFilenames] = useState<string[]>([]);
   const [sampleLimit, setSampleLimit] = useState("50");
@@ -142,7 +143,7 @@ export default function JacobianLensLab() {
       })
       .finally(() => setIsLoadingDataset(false));
     return () => controller.abort();
-  }, [dataset]);
+  }, [dataset, datasetRevision]);
 
   useEffect(() => { void refreshLenses(); }, [refreshLenses]);
 
@@ -201,6 +202,12 @@ export default function JacobianLensLab() {
     setDataset(formattedName);
   };
 
+  const handleDatasetUpdated = (formattedName: string) => {
+    void fetchCustomDatasets();
+    setDataset(formattedName);
+    setDatasetRevision((current) => current + 1);
+  };
+
   const deleteLens = async (lensId: string) => {
     try {
       await deleteJacobianLens(lensId);
@@ -233,7 +240,7 @@ export default function JacobianLensLab() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2"><Label>Speech-to-text model</Label><Select value={model} onValueChange={setModel}><SelectTrigger aria-label="Speech-to-text model"><SelectValue /></SelectTrigger><SelectContent>{modelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Transcript dataset</Label><div className="flex items-start gap-2"><Select value={dataset} onValueChange={setDataset}><SelectTrigger aria-label="Transcript dataset" className="min-w-0 flex-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem><SelectItem value="librispeech-1000">LibriSpeech 1000</SelectItem><SelectItem disabled value="separator">─ Custom Datasets ─</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select><CustomDatasetManager onDatasetCreated={handleDatasetCreated} onDatasetSelected={handleDatasetSelected} /></div></div>
+              <div className="space-y-2"><Label>Transcript dataset</Label><div className="flex items-start gap-2"><Select value={dataset} onValueChange={setDataset}><SelectTrigger aria-label="Transcript dataset" className="min-w-0 flex-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem><SelectItem value="librispeech-1000">LibriSpeech 1000</SelectItem><SelectItem disabled value="separator">─ Custom Datasets ─</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select><CustomDatasetManager onDatasetCreated={handleDatasetCreated} onDatasetSelected={handleDatasetSelected} onDatasetUpdated={handleDatasetUpdated} /></div></div>
             </CardContent>
           </Card>
 
