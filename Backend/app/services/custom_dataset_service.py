@@ -184,7 +184,7 @@ class CustomDatasetManager:
         return file_metadata
 
     def add_files_to_dataset(
-        self, dataset_name: str, staged: List[tuple[str, Path]]
+        self, dataset_name: str, staged: List[tuple[str, Path]], upload_id: str | None = None
     ) -> tuple[List[Dict], List[str]]:
         """Add a batch of files already staged on disk, rewriting metadata once.
 
@@ -195,6 +195,10 @@ class CustomDatasetManager:
         A file that fails is reported and skipped; the rest of the batch lands.
         """
         dataset_dir, metadata_file, metadata = self._load_for_write(dataset_name)
+        if upload_id:
+            previous = metadata.get("upload_batches", {}).get(upload_id)
+            if previous is not None:
+                return previous["uploaded_files"], previous["errors"]
         added: List[Dict] = []
         errors: List[str] = []
         for original_name, source in staged:
@@ -206,6 +210,12 @@ class CustomDatasetManager:
                 errors.append(f"Failed to upload {original_name}: {e}")
         if added:
             self._record_files(metadata, added)
+        if upload_id:
+            metadata.setdefault("upload_batches", {})[upload_id] = {
+                "uploaded_files": added,
+                "errors": errors,
+            }
+        if added or upload_id:
             _write_json_atomic(metadata_file, metadata)
         logger.info(
             "Added %d file(s) to dataset '%s' in session %s", len(added), dataset_name, self.session_id

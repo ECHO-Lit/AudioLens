@@ -79,6 +79,23 @@ async def test_upload_accepts_octet_stream_audio(client):
     assert body["uploaded_files"][0]["filename"] == "1673-143396-0000.flac"
 
 
+async def test_retrying_an_upload_batch_does_not_duplicate_audio(client):
+    await client.post("/upload/dataset/create", data={"dataset_name": "retry-set"})
+    upload_id = "353681ff-6a0c-4651-bc35-d3ba8b57019b"
+    request = {
+        "data": {"upload_id": upload_id},
+        "files": [("files", ("clip.flac", _flac_bytes(), "application/octet-stream"))],
+    }
+
+    first = await client.post("/upload/dataset/retry-set/files", **request)
+    repeated = await client.post("/upload/dataset/retry-set/files", **request)
+
+    assert first.status_code == repeated.status_code == 200
+    assert first.json()["uploaded_files"] == repeated.json()["uploaded_files"]
+    listing = await client.get("/upload/dataset/retry-set/files")
+    assert listing.json()["total_files"] == 1
+
+
 async def test_upload_rejects_undecodable_supported_extension(client):
     await client.post("/upload/dataset/create", data={"dataset_name": "invalid-audio"})
     response = await client.post(

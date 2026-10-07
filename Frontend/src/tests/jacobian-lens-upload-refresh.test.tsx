@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "./utils/render";
@@ -9,6 +9,57 @@ vi.mock("@/lib/upload", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/upload")>(),
   uploadWithProgress,
 }));
+
+beforeEach(() => uploadWithProgress.mockReset());
+
+it("retries a broken batch with the same upload ID", async () => {
+  stubFetch({ "GET /upload/dataset/list": { json: { datasets: [{
+    dataset_name: "speech", formatted_name: "custom:session:speech",
+    created_at: "2026-01-01T00:00:00Z", session_id: "session", files: [], total_files: 0,
+  }] } } });
+  uploadWithProgress.mockRejectedValueOnce(new Error("connection reset"))
+    .mockResolvedValueOnce({ dataset_name: "custom:session:speech", uploaded_files: [{ original_filename: "clip.flac" }] });
+  const { CustomDatasetManager } = await import("@/components/dataset/CustomDatasetManager");
+  renderWithProviders(<CustomDatasetManager />);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: /Manage Datasets/ }));
+  await user.click(screen.getByRole("tab", { name: /Upload Files/ }));
+  await user.selectOptions(screen.getByLabelText("Select Dataset"), "speech");
+  await user.upload(screen.getByLabelText("Audio Files"), new File(["audio"], "clip.flac", { type: "audio/flac" }));
+  await user.click(screen.getByRole("button", { name: /^Upload Files$/ }));
+
+  await waitFor(() => expect(uploadWithProgress).toHaveBeenCalledTimes(2), { timeout: 5000 });
+  const firstBody = uploadWithProgress.mock.calls[0][1] as FormData;
+  const retryBody = uploadWithProgress.mock.calls[1][1] as FormData;
+  expect(retryBody).toBe(firstBody);
+  expect(firstBody.get("upload_id")).toMatch(/[0-9a-f-]{36}/);
+  expect(await screen.findByText("clip.flac")).toBeInTheDocument();
+});
+
+it("skips files already present when resuming an upload", async () => {
+  const dataset = {
+    dataset_name: "speech", formatted_name: "custom:session:speech",
+    created_at: "2026-01-01T00:00:00Z", session_id: "session", total_files: 1,
+    files: [{ filename: "one.flac", original_filename: "one.flac", size: 3, duration: 1, sample_rate: 16000, uploaded_at: "2026-01-01T00:00:00Z" }],
+  };
+  stubFetch({ "GET /upload/dataset/list": { json: { datasets: [dataset] } } });
+  uploadWithProgress.mockResolvedValue({ dataset_name: dataset.formatted_name, uploaded_files: [{ original_filename: "two.m4a" }] });
+  const { CustomDatasetManager } = await import("@/components/dataset/CustomDatasetManager");
+  renderWithProviders(<CustomDatasetManager />);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: /Manage Datasets/ }));
+  await user.click(screen.getByRole("tab", { name: /Upload Files/ }));
+  await user.selectOptions(screen.getByLabelText("Select Dataset"), "speech");
+  await user.upload(screen.getByLabelText("Audio Files"), [
+    new File(["one"], "one.flac", { type: "audio/flac" }),
+    new File(["two"], "two.m4a", { type: "audio/mp4" }),
+  ]);
+  await user.click(screen.getByRole("button", { name: /^Upload Files$/ }));
+
+  await waitFor(() => expect(uploadWithProgress).toHaveBeenCalledTimes(1));
+  const body = uploadWithProgress.mock.calls[0][1] as FormData;
+  expect((body.getAll("files") as File[]).map(file => file.name)).toEqual(["two.m4a"]);
+});
 
 it("opens the upload form with a newly created dataset selected", async () => {
   let created = false;

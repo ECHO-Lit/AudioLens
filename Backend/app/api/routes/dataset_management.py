@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 import tempfile
 import weakref
+from uuid import UUID
 
 from app.core.settings import settings
 from app.services.custom_dataset_service import (
@@ -109,13 +110,19 @@ async def create_custom_dataset(
 async def upload_files_to_dataset(
     request: Request,
     dataset_name: str,
-    files: List[UploadFile] = File(..., description="Audio files to upload to the dataset")
+    files: List[UploadFile] = File(..., description="Audio files to upload to the dataset"),
+    upload_id: str | None = Form(default=None, description="Stable ID for safe upload retries"),
 ):
     """Upload multiple audio files to an existing custom dataset"""
     session_id = get_session_id(request)
 
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
+    if upload_id:
+        try:
+            upload_id = str(UUID(upload_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid upload ID") from exc
 
     # Validate file types.  Browsers label .flac/.m4a (and any unrecognised
     # audio) as application/octet-stream, so that content type must be
@@ -164,7 +171,7 @@ async def upload_files_to_dataset(
             # batch holds that dataset's lock.
             async with _dataset_lock(session_id, dataset_name):
                 uploaded_files, add_errors = await asyncio.to_thread(
-                    manager.add_files_to_dataset, dataset_name, staged
+                    manager.add_files_to_dataset, dataset_name, staged, upload_id
                 )
         errors.extend(add_errors)
         for error_msg in errors:

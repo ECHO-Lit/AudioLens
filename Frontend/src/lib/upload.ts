@@ -83,7 +83,10 @@ export function uploadWithProgress<T = unknown>(
       if (xhr.status >= 200 && xhr.status < 300) {
         response.json().then(resolve as (value: unknown) => void, reject);
       } else {
-        describeHttpError(response, context).then(reject, reject);
+        describeHttpError(response, context).then((error) => {
+          (error as Error & { status: number }).status = xhr.status;
+          reject(error);
+        }, reject);
       }
     };
     xhr.onerror = () => reject(new Error(context ? `${context}: ${NETWORK_ERROR}` : NETWORK_ERROR));

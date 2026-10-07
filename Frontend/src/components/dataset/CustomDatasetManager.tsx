@@ -81,6 +81,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   // Percentage of request bytes sent; null until the browser reports a total.
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  const [uploadRetryMessage, setUploadRetryMessage] = useState<string | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<Array<{file: string, status: 'pending' | 'uploading' | 'success' | 'error', error?: string}>>([]);
   const [selectedManifest, setSelectedManifest] = useState<File | null>(null);
@@ -177,22 +178,27 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
     setUploadLoading(true);
     setError(null);
     setUploadPercent(null);
+    setUploadRetryMessage(null);
 
-    const batches = batchUploadFiles(allFiles);
-    const totalBytes = allFiles.reduce((sum, file) => sum + file.size, 0);
+    const existing = datasets.find(item => item.dataset_name === selectedDataset)?.files || [];
+    const alreadyUploaded = new Set(existing.map(file => `${file.original_filename}\0${file.size}`));
+    const pendingFiles = allFiles.filter(file => !alreadyUploaded.has(`${file.name}\0${file.size}`));
+    const batches = batchUploadFiles(pendingFiles);
+    const totalBytes = pendingFiles.reduce((sum, file) => sum + file.size, 0);
     let completedBytes = 0;
 
     type FileUploadStatus = { file: string; status: 'pending' | 'uploading' | 'success' | 'error'; error?: string };
     const statusMap = new Map<string, FileUploadStatus>(allFiles.map(file => [file.name, {
       file: file.name,
-      status: 'pending' as const,
+      status: alreadyUploaded.has(`${file.name}\0${file.size}`) ? 'success' as const : 'pending' as const,
     }]));
     setUploadStatus(Array.from(statusMap.values()));
-    let updatedDatasetName: string | null = null;
+    let updatedDatasetName: string | null = datasets.find(item => item.dataset_name === selectedDataset)?.formatted_name || null;
 
     try {
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const formData = new FormData();
+        formData.append('upload_id', crypto.randomUUID());
         const batchBytes = batches[batchIndex].reduce((sum, file) => sum + file.size, 0);
         batches[batchIndex].forEach(file => {
           formData.append('files', file);
@@ -201,25 +207,40 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
         // XMLHttpRequest rather than fetch: only XHR reports upload bytes, so
         // the bar shows real transfer progress (BUG-45, completing 3.1.3's
         // BUG-22). Batches already sent count as whole.
-        const data = await uploadWithProgress<{
+        type BatchResponse = {
           dataset_name?: string;
           uploaded_files?: Array<{ original_filename: string }>;
           errors?: string[];
-        }>(
-          `${API_BASE}/upload/dataset/${selectedDataset}/files`,
-          formData,
-          {
-            context: 'Upload failed',
-            onProgress: ({ fraction }) =>
-              setUploadPercent(
-                fraction === null
-                  ? null
-                  : Math.round(totalBytes > 0
+        };
+        let data: BatchResponse | undefined;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            data = await uploadWithProgress<BatchResponse>(
+              `${API_BASE}/upload/dataset/${encodeURIComponent(selectedDataset)}/files`,
+              formData,
+              {
+                context: 'Upload failed',
+                onProgress: ({ fraction }) => {
+                  if (fraction === null) return;
+                  const percent = Math.round(totalBytes > 0
                     ? ((completedBytes + fraction * batchBytes) / totalBytes) * 100
-                    : ((batchIndex + fraction) / batches.length) * 100),
-              ),
-          },
-        );
+                    : ((batchIndex + fraction) / batches.length) * 100);
+                  setUploadPercent(current => Math.max(current ?? 0, percent));
+                },
+              },
+            );
+            setUploadRetryMessage(null);
+            break;
+          } catch (caught) {
+            const status = (caught as Error & { status?: number }).status;
+            const retryable = (caught as Error).name !== 'AbortError'
+              && (status === undefined || status === 408 || status === 429 || status >= 500);
+            if (!retryable || attempt === 3) throw caught;
+            setUploadRetryMessage(`Connection interrupted. Retrying batch ${batchIndex + 1} of ${batches.length} (${attempt + 1}/3)…`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+          }
+        }
+        if (!data) throw new Error('Upload failed: No response from the server');
 
         batches[batchIndex].forEach(file => {
           const entry = statusMap.get(file.name);
@@ -252,11 +273,10 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
         status: item.status === 'success' ? 'success' : 'error',
         error: item.error ?? (err instanceof Error ? err.message : 'Upload failed'),
       })));
-      if (updatedDatasetName) {
-        await fetchDatasets();
-        onDatasetUpdated?.(updatedDatasetName);
-      }
+      await fetchDatasets();
+      if (updatedDatasetName) onDatasetUpdated?.(updatedDatasetName);
     } finally {
+      setUploadRetryMessage(null);
       setUploadLoading(false);
     }
   };
@@ -563,6 +583,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                         ? `Processing ${selectedFiles?.length ?? 0} file${(selectedFiles?.length ?? 0) === 1 ? "" : "s"} on the server…`
                         : `Uploading ${selectedFiles?.length ?? 0} file${(selectedFiles?.length ?? 0) === 1 ? "" : "s"}${uploadPercent === null ? "…" : ` — ${uploadPercent}%`}`}
                     </p>
+                    {uploadRetryMessage && <p className="text-sm text-center text-amber-700">{uploadRetryMessage}</p>}
                   </div>
                 )}
                 
