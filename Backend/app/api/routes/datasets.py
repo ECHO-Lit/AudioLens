@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from typing import List
 import os
 from app.services.dataset_service import (
+    DATASET_PATHS,
     load_metadata,
     resolve_file,
     media_type_for,
@@ -15,6 +16,15 @@ from app.services.dataset_service import (
 from app.services.dataset_eda_service import compute_metadata_eda
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get("/datasets/available")
+async def available_datasets() -> JSONResponse:
+    """List built-in datasets whose metadata is actually mounted on this host."""
+    return JSONResponse(content={
+        "datasets": [name for name in ("common-voice", "ravdess", "librispeech-1000")
+                     if DATASET_PATHS[name].is_file()],
+    })
 
 
 def get_session_id(request: Request) -> str:

@@ -50,6 +50,12 @@ const builtInModels = [
   { value: "whisper-large", label: "Whisper Large" },
 ];
 
+const builtInDatasetLabels: Record<string, string> = {
+  "common-voice": "Common Voice",
+  ravdess: "RAVDESS",
+  "librispeech-1000": "LibriSpeech 1000",
+};
+
 const baseFilename = (row: DatasetRow) => {
   const raw = row.path || row.filepath || row.file || row.filename;
   if (typeof raw !== "string") return "";
@@ -64,8 +70,9 @@ const transcriptFor = (row: DatasetRow) => {
 export default function JacobianLensLab() {
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
+  const [availableBuiltIns, setAvailableBuiltIns] = useState<string[]>([]);
   const [model, setModel] = useState("whisper-base");
-  const [dataset, setDataset] = useState("common-voice");
+  const [dataset, setDataset] = useState("");
   const [datasetRevision, setDatasetRevision] = useState(0);
   const [rows, setRows] = useState<DatasetRow[]>([]);
   const [selectedFilenames, setSelectedFilenames] = useState<string[]>([]);
@@ -112,7 +119,16 @@ export default function JacobianLensLab() {
 
   useEffect(() => {
     listCustomModels().then(setCustomModels).catch(() => setCustomModels([]));
-    void fetchCustomDatasets();
+    void Promise.all([
+      fetch(`${API_BASE}/upload/dataset/list`, { credentials: "include" }).then((response) => response.ok ? response.json() : { datasets: [] }).catch(() => ({ datasets: [] })),
+      fetch(`${API_BASE}/datasets/available`, { credentials: "include" }).then((response) => response.ok ? response.json() : { datasets: [] }).catch(() => ({ datasets: [] })),
+    ]).then(([custom, builtIns]) => {
+      const owned = (custom.datasets || []) as CustomDataset[];
+      const provisioned = (builtIns.datasets || []) as string[];
+      setCustomDatasets(owned);
+      setAvailableBuiltIns(provisioned);
+      setDataset((current) => current || owned[0]?.formatted_name || provisioned[0] || "");
+    });
   }, [fetchCustomDatasets]);
 
   useEffect(() => {
@@ -120,6 +136,12 @@ export default function JacobianLensLab() {
   }, [model, modelOptions]);
 
   useEffect(() => {
+    if (!dataset) {
+      setRows([]);
+      setSelectedFilenames([]);
+      setIsLoadingDataset(false);
+      return;
+    }
     const controller = new AbortController();
     setIsLoadingDataset(true);
     setError(null);
@@ -240,7 +262,7 @@ export default function JacobianLensLab() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2"><Label>Speech-to-text model</Label><Select value={model} onValueChange={setModel}><SelectTrigger aria-label="Speech-to-text model"><SelectValue /></SelectTrigger><SelectContent>{modelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Transcript dataset</Label><div className="flex items-start gap-2"><Select value={dataset} onValueChange={setDataset}><SelectTrigger aria-label="Transcript dataset" className="min-w-0 flex-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem><SelectItem value="librispeech-1000">LibriSpeech 1000</SelectItem><SelectItem disabled value="separator">─ Custom Datasets ─</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select><CustomDatasetManager onDatasetCreated={handleDatasetCreated} onDatasetSelected={handleDatasetSelected} onDatasetUpdated={handleDatasetUpdated} /></div></div>
+              <div className="space-y-2"><Label>Transcript dataset</Label><div className="flex items-start gap-2"><Select value={dataset || undefined} onValueChange={setDataset}><SelectTrigger aria-label="Transcript dataset" className="min-w-0 flex-1"><SelectValue placeholder="Choose a dataset" /></SelectTrigger><SelectContent>{availableBuiltIns.map((name) => <SelectItem key={name} value={name}>{builtInDatasetLabels[name] || name}</SelectItem>)}{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select><CustomDatasetManager onDatasetCreated={handleDatasetCreated} onDatasetSelected={handleDatasetSelected} onDatasetUpdated={handleDatasetUpdated} /></div>{!dataset && <p className="text-xs text-muted-foreground">No training dataset is available. In Manage Datasets, create a dataset, upload audio files, then upload metadata.csv with matching transcripts.</p>}</div>
             </CardContent>
           </Card>
 
@@ -250,7 +272,7 @@ export default function JacobianLensLab() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap items-end gap-2"><div className="space-y-1"><Label htmlFor="sample-limit" className="text-xs">Select first</Label><Input id="sample-limit" value={sampleLimit} onChange={(event) => setSampleLimit(event.target.value)} className="h-8 w-24" inputMode="numeric" /></div><Button size="sm" variant="outline" onClick={selectFirstSamples} disabled={!trainableRows.length || fitJob.isRunning}><CheckSquare className="mr-1 h-3.5 w-3.5" />Select samples</Button><Button size="sm" variant="ghost" onClick={() => setSelectedFilenames([])} disabled={!selectedFilenames.length || fitJob.isRunning}><Square className="mr-1 h-3.5 w-3.5" />Clear</Button></div>
-              {!isLoadingDataset && !trainableRows.length && <p className="text-sm text-muted-foreground">This dataset has no usable transcript field, so it cannot fit a J-lens.</p>}
+              {!isLoadingDataset && Boolean(dataset) && !trainableRows.length && <p className="text-sm text-muted-foreground">This dataset has no matching audio and transcripts yet. Upload both audio files and metadata.csv in Manage Datasets.</p>}
               <div className="max-h-[420px] overflow-auto rounded border">
                 {trainableRows.map((sample) => <label key={sample.filename} className="flex cursor-pointer items-start gap-3 border-b p-3 last:border-b-0 hover:bg-muted/40"><Checkbox checked={selectedFilenames.includes(sample.filename)} onCheckedChange={() => toggleSample(sample.filename)} disabled={fitJob.isRunning || (!selectedFilenames.includes(sample.filename) && selectedFilenames.length >= 1000)} /><span className="min-w-0"><span className="block font-mono text-xs">{sample.filename}</span><span className="block truncate text-xs text-muted-foreground">{sample.transcript}</span></span></label>)}
               </div>

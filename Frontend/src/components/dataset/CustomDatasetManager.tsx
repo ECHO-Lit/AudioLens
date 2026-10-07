@@ -142,9 +142,11 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       }
       
       const data = await response.json();
+      const createdName = newDatasetName.trim();
       setNewDatasetName("");
       await fetchDatasets(); // Refresh the list
-      setActiveTab("list"); // Switch to list tab
+      setSelectedDataset(createdName);
+      setActiveTab("upload");
       
       if (onDatasetCreated) {
         onDatasetCreated(data.dataset_name);
