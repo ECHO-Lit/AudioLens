@@ -167,6 +167,19 @@ describe("TestProgressSemantics", () => {
 });
 
 describe("TestUploadProgress", () => {
+  it("keeps a multi-file upload below the proxy body and file-count limits", async () => {
+    const { batchUploadFiles } = await import("@/lib/upload");
+    const files = Array.from({ length: 25 }, (_, index) => ({ name: `${index}.wav`, size: 5 * 1024 * 1024 }));
+    const batches = batchUploadFiles(files);
+
+    expect(batches.flat().map(file => file.name)).toEqual(files.map(file => file.name));
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches) {
+      expect(batch.length).toBeLessThanOrEqual(8);
+      expect(batch.reduce((bytes, file) => bytes + file.size, 0)).toBeLessThanOrEqual(16 * 1024 * 1024);
+    }
+  });
+
   it("PF-05 reports bytes sent and resolves with the server's JSON", async () => {
     // Guards BUG-45 at the transport: the helper sends the session cookie and
     // turns each transfer event into a fraction.
@@ -193,6 +206,7 @@ describe("TestUploadProgress", () => {
   it.each([
     [413, {}, "Upload failed: That file is too large. The limit is 100 MB and 10 minutes per file."],
     [404, { detail: "Dataset 'speech' does not exist" }, "Upload failed: Dataset 'speech' does not exist"],
+    [524, {}, "Upload failed: The upload took too long for the web proxy. Try a smaller batch or shorter audio files."],
   ])("PF-06 explains a %i without showing the status code", async (status, body, expected) => {
     // US-4, through the same describeHttpError the Fetch call sites use.
     const { requests } = stubXhr();

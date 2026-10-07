@@ -5,7 +5,10 @@ import { renderWithProviders } from "./utils/render";
 import { stubFetch } from "./utils/fetchStub";
 
 const { uploadWithProgress } = vi.hoisted(() => ({ uploadWithProgress: vi.fn() }));
-vi.mock("@/lib/upload", () => ({ uploadWithProgress }));
+vi.mock("@/lib/upload", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/upload")>(),
+  uploadWithProgress,
+}));
 
 it("opens the upload form with a newly created dataset selected", async () => {
   let created = false;

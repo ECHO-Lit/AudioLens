@@ -39,6 +39,8 @@ function fallbackFor(status: number): string {
       return "The request was rejected as invalid. Check the selected model, dataset and options.";
     case 429:
       return "Too many requests at once. Wait a few seconds, then try again.";
+    case 524:
+      return "The upload took too long for the web proxy. Try a smaller batch or shorter audio files.";
     case 503:
       return "The processing service is temporarily unavailable. Wait a moment and try again.";
     default:

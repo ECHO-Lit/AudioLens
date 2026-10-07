@@ -28,6 +28,28 @@ export interface UploadOptions {
   context?: string;
 }
 
+/** Keep multipart requests below the hosted proxy's body and timeout limits. */
+export function batchUploadFiles<T extends { size: number }>(
+  files: T[],
+  maxBatchBytes = 16 * 1024 * 1024,
+  maxFilesPerBatch = 8,
+): T[][] {
+  const batches: T[][] = [];
+  let batch: T[] = [];
+  let batchBytes = 0;
+  for (const file of files) {
+    if (batch.length && (batch.length >= maxFilesPerBatch || batchBytes + file.size > maxBatchBytes)) {
+      batches.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+    batch.push(file);
+    batchBytes += file.size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
 const NETWORK_ERROR =
   "The upload could not reach the server. Check your connection and try again.";
 

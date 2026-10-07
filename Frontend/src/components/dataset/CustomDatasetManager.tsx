@@ -29,7 +29,7 @@ import {
   X
 } from "lucide-react";
 import { API_BASE } from '@/lib/api';
-import { uploadWithProgress } from '@/lib/upload';
+import { batchUploadFiles, uploadWithProgress } from '@/lib/upload';
 import { DatasetLabelsTab } from './DatasetLabelsTab';
 
 interface CustomDataset {
@@ -165,18 +165,22 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       return;
     }
 
+    const allFiles = Array.from(selectedFiles);
+    // The hosted Cloudflare route caps the entire multipart body at 100 MB,
+    // including boundaries and headers. Leave room for that overhead.
+    const maxFileBytes = API_BASE.startsWith('/api') ? 95_000_000 : 100 * 1024 * 1024;
+    const tooLarge = allFiles.find(file => file.size > maxFileBytes);
+    if (tooLarge) {
+      setError(`${tooLarge.name} is too large for this upload route. Use an audio file under ${Math.floor(maxFileBytes / 1_000_000)} MB.`);
+      return;
+    }
     setUploadLoading(true);
     setError(null);
     setUploadPercent(null);
 
-    // Reference datasets are hundreds of clips; one giant multipart body is
-    // fragile, so audio is sent in bounded batches with cumulative progress.
-    const allFiles = Array.from(selectedFiles);
-    const batchSize = 25;
-    const batches: File[][] = [];
-    for (let index = 0; index < allFiles.length; index += batchSize) {
-      batches.push(allFiles.slice(index, index + batchSize));
-    }
+    const batches = batchUploadFiles(allFiles);
+    const totalBytes = allFiles.reduce((sum, file) => sum + file.size, 0);
+    let completedBytes = 0;
 
     type FileUploadStatus = { file: string; status: 'pending' | 'uploading' | 'success' | 'error'; error?: string };
     const statusMap = new Map<string, FileUploadStatus>(allFiles.map(file => [file.name, {
@@ -189,6 +193,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
     try {
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const formData = new FormData();
+        const batchBytes = batches[batchIndex].reduce((sum, file) => sum + file.size, 0);
         batches[batchIndex].forEach(file => {
           formData.append('files', file);
         });
@@ -209,7 +214,9 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
               setUploadPercent(
                 fraction === null
                   ? null
-                  : Math.round(((batchIndex + fraction) / batches.length) * 100),
+                  : Math.round(totalBytes > 0
+                    ? ((completedBytes + fraction * batchBytes) / totalBytes) * 100
+                    : ((batchIndex + fraction) / batches.length) * 100),
               ),
           },
         );
@@ -224,6 +231,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
           entry.error = hasError ? (data.errors || []).find((error: string) => error.includes(file.name)) : undefined;
         });
         setUploadStatus(Array.from(statusMap.values()));
+        completedBytes += batchBytes;
       }
 
       // Clear form
