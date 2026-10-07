@@ -303,7 +303,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       }
       const data = await response.json();
       const details = data.manifest;
-      setManifestMessage(`Loaded ${details.pair_count} transcript pairs; ${details.matched_audio_count} match uploaded audio.`);
+      setManifestMessage(`Loaded ${details.pair_count} transcript pairs; ${details.matched_audio_count} match uploaded audio.${details.matched_audio_count === 0 ? ' Check that the CSV filenames match the uploaded audio; J-Lens cannot fit until at least 2 pairs match.' : ''}`);
       setSelectedManifest(null);
       const manifestInput = document.getElementById('manifest-input') as HTMLInputElement | null;
       if (manifestInput) manifestInput.value = '';

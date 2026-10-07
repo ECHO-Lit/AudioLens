@@ -157,6 +157,21 @@ it("reloads J-Lens samples after audio and transcript uploads", async () => {
   await waitFor(() => expect(api.callsFor(`GET ${metadataPath}`)).toHaveLength(3));
   expect(await screen.findByText(/2 transcript-bearing samples available/)).toBeInTheDocument();
   await user.click(screen.getAllByRole("button", { name: "Close" })[0]);
-  await user.click(screen.getByRole("button", { name: /Select samples/ }));
   expect(screen.getByRole("button", { name: /Fit with 2 samples/ })).toBeEnabled();
+});
+
+it("shows uploaded audio and a CSV template when manifest pairs do not match", async () => {
+  const formattedName = "custom:session:speech";
+  stubFetch({
+    "GET /models": { json: [] },
+    "GET /models/jacobian-lenses/whisper-base": { json: [] },
+    "GET /upload/dataset/list": { json: { datasets: [{ dataset_name: "speech", formatted_name: formattedName, total_files: 2, manifest: { pair_count: 2, matched_audio_count: 0, unmatched_filenames: ["other.mp3"] } }] } },
+    "GET /datasets/available": { json: { datasets: [] } },
+    [`GET /${encodeURIComponent(formattedName)}/metadata`]: { json: [{ filename: "one.flac", transcript: "" }, { filename: "two.m4a", transcript: "" }] },
+  });
+  const { default: JacobianLensLab } = await import("@/pages/JacobianLensLab");
+  renderWithProviders(<JacobianLensLab />, { route: "/jacobian-lens" });
+  expect(await screen.findByText(/2 audio files loaded, but none have a matching transcript/)).toBeInTheDocument();
+  expect(screen.getByText(/other.mp3/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Download metadata.csv template/ })).toBeEnabled();
 });

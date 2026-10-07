@@ -23,6 +23,49 @@ GLOBAL_DATASETS_DIR = Path("uploads/sessions/_global_datasets")
 MANIFEST_FILENAME_FIELDS = ("filename", "file", "filepath", "path")
 MANIFEST_TRANSCRIPT_FIELDS = ("transcript", "sentence", "text", "statement")
 
+
+def _resolve_manifest(metadata: Dict) -> Dict[str, str]:
+    """Join CSV transcripts to stored audio, including unique format conversions.
+
+    A corpus CSV may name clip.mp3 while the uploaded audio is clip.flac.
+    Only unique stems are joined; ambiguous names must be corrected by the user.
+    """
+    files = metadata.get("files", [])
+    transcripts = metadata.get("transcripts", {})
+    audio_by_name: Dict[str, List[str]] = {}
+    audio_by_stem: Dict[str, List[str]] = {}
+    for item in files:
+        name = item["filename"]
+        audio_by_name.setdefault(name.casefold(), []).append(name)
+        audio_by_stem.setdefault(Path(name).stem.casefold(), []).append(name)
+
+    matched: Dict[str, str] = {}
+    unmatched: List[str] = []
+    pending: List[tuple[str, str]] = []
+    for source, transcript in transcripts.items():
+        exact = audio_by_name.get(source.casefold(), [])
+        if len(exact) == 1 and exact[0] not in matched:
+            matched[exact[0]] = transcript
+        else:
+            pending.append((source, transcript))
+
+    pending_stems: Dict[str, int] = {}
+    for source, _ in pending:
+        stem = Path(source).stem.casefold()
+        pending_stems[stem] = pending_stems.get(stem, 0) + 1
+    for source, transcript in pending:
+        stem = Path(source).stem.casefold()
+        candidates = audio_by_stem.get(stem, [])
+        if pending_stems[stem] == 1 and len(candidates) == 1 and candidates[0] not in matched:
+            matched[candidates[0]] = transcript
+        else:
+            unmatched.append(source)
+
+    if metadata.get("manifest") is not None:
+        metadata["manifest"]["matched_audio_count"] = len(matched)
+        metadata["manifest"]["unmatched_filenames"] = sorted(unmatched)[:20]
+    return matched
+
 # Answer key for the layer probes, stored beside the audio.  Held as the parsed
 # table rather than the uploaded CSV so that a filename-derived table and an
 # uploaded one are the same shape downstream.
@@ -167,11 +210,8 @@ class CustomDatasetManager:
     def _record_files(metadata: Dict, added: List[Dict]) -> None:
         metadata["files"].extend(added)
         metadata["total_files"] = len(metadata["files"])
-        if metadata.get("manifest") and metadata.get("transcripts"):
-            stored_files = {item["filename"] for item in metadata["files"]}
-            unmatched = sorted(name for name in metadata["transcripts"] if name not in stored_files)
-            metadata["manifest"]["matched_audio_count"] = len(metadata["transcripts"]) - len(unmatched)
-            metadata["manifest"]["unmatched_filenames"] = unmatched[:20]
+        if metadata.get("manifest"):
+            _resolve_manifest(metadata)
 
     def add_file_to_dataset(self, dataset_name: str, filename: str, file_data: bytes) -> Dict:
         """Add a file to an existing custom dataset"""
@@ -270,9 +310,6 @@ class CustomDatasetManager:
             raise ValueError("Dataset manifest contains no filename/transcript pairs")
 
         metadata = _read_json_or_raise(metadata_file, dataset_name)
-        stored_files = {file_info["filename"] for file_info in metadata.get("files", [])}
-        matched = sum(name in stored_files for name in transcripts)
-        unmatched = sorted(name for name in transcripts if name not in stored_files)
         metadata["transcripts"] = transcripts
         metadata["manifest"] = {
             "filename": Path(filename).name,
@@ -280,15 +317,16 @@ class CustomDatasetManager:
             "filename_field": filename_field,
             "transcript_field": transcript_field,
             "pair_count": len(transcripts),
-            "matched_audio_count": matched,
-            "unmatched_filenames": unmatched[:20],
+            "matched_audio_count": 0,
+            "unmatched_filenames": [],
         }
+        matched = _resolve_manifest(metadata)
         _write_json_atomic(metadata_file, metadata)
         return {
             "filename": Path(filename).name,
             "pair_count": len(transcripts),
-            "matched_audio_count": matched,
-            "unmatched_audio_count": len(unmatched),
+            "matched_audio_count": len(matched),
+            "unmatched_audio_count": len(transcripts) - len(matched),
             "blank_row_count": blank_rows,
             "filename_field": filename_field,
             "transcript_field": transcript_field,
@@ -307,6 +345,7 @@ class CustomDatasetManager:
                     try:
                         with metadata_file.open("r") as f:
                             metadata = json.load(f)
+                            _resolve_manifest(metadata)
                             datasets.append(metadata)
                     except Exception as e:
                         logger.warning(f"Could not read metadata for dataset {dataset_dir.name}: {e}")
@@ -367,7 +406,9 @@ class CustomDatasetManager:
         
         try:
             with metadata_file.open("r") as f:
-                return json.load(f)
+                metadata = json.load(f)
+            _resolve_manifest(metadata)
+            return metadata
         except Exception as e:
             logger.error(f"Could not read metadata for dataset {dataset_name}: {e}")
             return None
@@ -469,7 +510,7 @@ class CustomDatasetManager:
             return []
 
         csv_format_files = []
-        transcripts = metadata.get("transcripts", {})
+        transcripts = _resolve_manifest(metadata)
         for file_info in metadata["files"]:
             csv_format_files.append({
                 "filename": file_info["filename"],

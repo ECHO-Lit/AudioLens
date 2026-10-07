@@ -58,6 +58,35 @@ def test_manifest_requires_supported_pair_columns(tmp_path, monkeypatch):
         manager.add_manifest_to_dataset("speech", "metadata.csv", b"audio,label\nclip.wav,hello\n")
 
 
+def test_existing_manifest_matches_unique_audio_with_changed_extension(tmp_path, monkeypatch):
+    from app.services import custom_dataset_service as datasets
+
+    monkeypatch.setattr(datasets, "SESSIONS_BASE_DIR", tmp_path / "sessions")
+    manager = datasets.CustomDatasetManager("session-a")
+    manager.create_dataset("speech")
+    manager.add_file_to_dataset("speech", "clip.flac", _flac_bytes())
+    manager.add_manifest_to_dataset("speech", "metadata.csv", b"path,sentence\nclips/clip.mp3,hello\n")
+
+    # Existing stored CSVs must become usable without uploading the CSV again.
+    metadata = manager.get_dataset_metadata("speech")
+    assert metadata["manifest"]["matched_audio_count"] == 1
+    assert manager.get_dataset_files_as_csv_format("speech")[0]["transcript"] == "hello"
+
+
+def test_manifest_does_not_guess_between_same_stem_audio_files(tmp_path, monkeypatch):
+    from app.services import custom_dataset_service as datasets
+
+    monkeypatch.setattr(datasets, "SESSIONS_BASE_DIR", tmp_path / "sessions")
+    manager = datasets.CustomDatasetManager("session-a")
+    manager.create_dataset("speech")
+    manager.add_file_to_dataset("speech", "clip.flac", _flac_bytes())
+    manager.add_file_to_dataset("speech", "clip.wav", _wav_bytes())
+    result = manager.add_manifest_to_dataset("speech", "metadata.csv", b"filename,transcript\nclip.mp3,hello\n")
+
+    assert result["matched_audio_count"] == 0
+    assert all(not row["transcript"] for row in manager.get_dataset_files_as_csv_format("speech"))
+
+
 async def test_upload_accepts_octet_stream_audio(client):
     """Browsers label .flac/.m4a as application/octet-stream; /upload accepts it
     and the dataset-files route must not reject it (regression: the reference

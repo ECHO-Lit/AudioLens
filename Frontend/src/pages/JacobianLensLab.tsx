@@ -34,6 +34,8 @@ interface TrainingSample {
 interface CustomDataset {
   dataset_name: string;
   formatted_name: string;
+  total_files?: number;
+  manifest?: { pair_count: number; matched_audio_count: number; unmatched_filenames?: string[] };
 }
 
 interface LensFitResult {
@@ -98,6 +100,7 @@ export default function JacobianLensLab() {
     () => trainableRows.filter((sample) => selectedFilenames.includes(sample.filename)),
     [selectedFilenames, trainableRows],
   );
+  const selectedCustomDataset = customDatasets.find((item) => item.formatted_name === dataset);
 
   const refreshLenses = useCallback(async () => {
     try {
@@ -127,7 +130,10 @@ export default function JacobianLensLab() {
       const provisioned = (builtIns.datasets || []) as string[];
       setCustomDatasets(owned);
       setAvailableBuiltIns(provisioned);
-      setDataset((current) => current || owned[0]?.formatted_name || provisioned[0] || "");
+      const mostRelevant = [...owned].sort((left, right) =>
+        (right.manifest?.matched_audio_count || 0) - (left.manifest?.matched_audio_count || 0)
+        || (right.total_files || 0) - (left.total_files || 0))[0];
+      setDataset((current) => current || mostRelevant?.formatted_name || provisioned[0] || "");
     });
   }, [fetchCustomDatasets]);
 
@@ -159,7 +165,13 @@ export default function JacobianLensLab() {
         }
         return response.json() as Promise<DatasetRow[]>;
       })
-      .then(setRows)
+      .then((loadedRows) => {
+        setRows(loadedRows);
+        setSelectedFilenames(loadedRows
+          .filter((row) => Boolean(baseFilename(row) && transcriptFor(row)))
+          .slice(0, 50)
+          .map(baseFilename));
+      })
       .catch((caught) => {
         if ((caught as Error).name !== "AbortError") setError(caught instanceof Error ? caught.message : "Could not load dataset metadata");
       })
@@ -173,6 +185,16 @@ export default function JacobianLensLab() {
     const parsed = Number.parseInt(sampleLimit, 10);
     const limit = Number.isFinite(parsed) ? Math.max(2, Math.min(parsed, 1000)) : 50;
     setSelectedFilenames(trainableRows.slice(0, limit).map((sample) => sample.filename));
+  };
+
+  const downloadManifestTemplate = () => {
+    const csv = `filename,transcript\n${rows.map((row) => `"${baseFilename(row).replaceAll('"', '""')}",`).join("\n")}\n`;
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "metadata.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const toggleSample = (filename: string) => {
@@ -272,7 +294,9 @@ export default function JacobianLensLab() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap items-end gap-2"><div className="space-y-1"><Label htmlFor="sample-limit" className="text-xs">Select first</Label><Input id="sample-limit" value={sampleLimit} onChange={(event) => setSampleLimit(event.target.value)} className="h-8 w-24" inputMode="numeric" /></div><Button size="sm" variant="outline" onClick={selectFirstSamples} disabled={!trainableRows.length || fitJob.isRunning}><CheckSquare className="mr-1 h-3.5 w-3.5" />Select samples</Button><Button size="sm" variant="ghost" onClick={() => setSelectedFilenames([])} disabled={!selectedFilenames.length || fitJob.isRunning}><Square className="mr-1 h-3.5 w-3.5" />Clear</Button></div>
-              {!isLoadingDataset && Boolean(dataset) && !trainableRows.length && <p className="text-sm text-muted-foreground">This dataset has no matching audio and transcripts yet. Upload both audio files and metadata.csv in Manage Datasets.</p>}
+              {!isLoadingDataset && Boolean(dataset) && !trainableRows.length && rows.length > 0 && <div className="space-y-2 text-sm text-muted-foreground"><p>{rows.length} audio files loaded, but none have a matching transcript. {selectedCustomDataset?.manifest ? `The uploaded metadata.csv has ${selectedCustomDataset.manifest.pair_count} transcript pairs; ${selectedCustomDataset.manifest.matched_audio_count} match audio filenames.` : "Upload a metadata.csv with filename and transcript columns in Manage Datasets."}</p>{selectedCustomDataset?.manifest?.unmatched_filenames?.length ? <p>CSV filename example: <code>{selectedCustomDataset.manifest.unmatched_filenames[0]}</code>. Uploaded audio example: <code>{baseFilename(rows[0])}</code>.</p> : null}<Button size="sm" variant="outline" onClick={downloadManifestTemplate}>Download metadata.csv template</Button><p>Fill in the transcript for each audio file, then upload the CSV in Manage Datasets.</p></div>}
+              {!isLoadingDataset && Boolean(dataset) && !trainableRows.length && !rows.length && <p className="text-sm text-muted-foreground">This dataset has no audio files. Upload audio files in Manage Datasets.</p>}
+              {!isLoadingDataset && trainableRows.length === 1 && <p className="text-sm text-muted-foreground">At least 2 audio files with matching transcripts are required to fit a lens.</p>}
               <div className="max-h-[420px] overflow-auto rounded border">
                 {trainableRows.map((sample) => <label key={sample.filename} className="flex cursor-pointer items-start gap-3 border-b p-3 last:border-b-0 hover:bg-muted/40"><Checkbox checked={selectedFilenames.includes(sample.filename)} onCheckedChange={() => toggleSample(sample.filename)} disabled={fitJob.isRunning || (!selectedFilenames.includes(sample.filename) && selectedFilenames.length >= 1000)} /><span className="min-w-0"><span className="block font-mono text-xs">{sample.filename}</span><span className="block truncate text-xs text-muted-foreground">{sample.transcript}</span></span></label>)}
               </div>
