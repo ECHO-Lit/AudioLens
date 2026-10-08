@@ -50,6 +50,7 @@ interface ToolbarProps {
   onToggleBottomPanel?: () => void;
   /** Opens the dataset panel's file picker. Without it the Upload button is inert. */
   onUploadClick?: () => void;
+  onDatasetUpdated?: (datasetName: string) => void;
 }
 
 interface CustomDataset {
@@ -70,7 +71,7 @@ const defaultDatasetForModel: Record<string, string> = {
   "wav2vec2": "ravdess",
 };
 
-export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference, leftPanelOpen, rightPanelOpen, bottomPanelOpen, onToggleLeftPanel, onToggleRightPanel, onToggleBottomPanel, onUploadClick}: ToolbarProps) => {
+export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference, leftPanelOpen, rightPanelOpen, bottomPanelOpen, onToggleLeftPanel, onToggleRightPanel, onToggleBottomPanel, onUploadClick, onDatasetUpdated}: ToolbarProps) => {
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
 
@@ -354,6 +355,10 @@ const onModelChange = (value: string) => {
         <CustomDatasetManager
           onDatasetCreated={handleDatasetCreated}
           onDatasetSelected={handleDatasetSelected}
+          onDatasetUpdated={(datasetName) => {
+            fetchCustomDatasets();
+            onDatasetUpdated?.(datasetName);
+          }}
         />
         <CustomModelManager onModelsChanged={setCustomModels} />
 

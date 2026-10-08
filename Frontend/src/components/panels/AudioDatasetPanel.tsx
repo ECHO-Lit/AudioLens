@@ -30,6 +30,7 @@ interface AudioDatasetPanelProps {
   model: string | null;
   dataset: string;
   originalDataset?: string;
+  datasetRefreshToken?: number;
   uploadedFiles?: UploadedFile[];
   selectedFile?: UploadedFile | null;
   onFileSelect?: (file: UploadedFile) => void;
@@ -59,6 +60,7 @@ export const AudioDatasetPanel = ({
   model,
   dataset,
   originalDataset,
+  datasetRefreshToken,
   selectedFile,
   onFileSelect,
   onUploadSuccess,
@@ -82,6 +84,8 @@ export const AudioDatasetPanel = ({
   // below is declared BEFORE the metadata-fetch effect, so on a dataset change it
   // runs first and would otherwise see the previous dataset's rows.
   const [metadataDataset, setMetadataDataset] = useState<string>("");
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [metadataLoading, setMetadataLoading] = useState(false);
   // Use external predictionMap from parent
   const predictionMap = externalPredictionMap || {};
   const [inferenceStatus, setInferenceStatus] = useState<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
@@ -313,13 +317,13 @@ export const AudioDatasetPanel = ({
   const handleReloadDataset = useCallback(async () => {
     const allowed = ["common-voice", "ravdess", "l2-arctic", "saa"];
     const datasetToUse = originalDataset || dataset;
-    if (!allowed.includes(datasetToUse)) {
+    if (!allowed.includes(datasetToUse) && !datasetToUse.startsWith('custom:')) {
       setDatasetMetadata([]);
       return;
     }
     
     try {
-      const res = await fetch(`${API_BASE}/${dataset}/metadata`, { credentials: 'include' });
+      const res = await fetch(`${API_BASE}/${encodeURIComponent(datasetToUse)}/metadata`, { credentials: 'include' });
       if (!res.ok) throw new Error(`Failed to fetch metadata: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
@@ -338,6 +342,7 @@ export const AudioDatasetPanel = ({
         });
 
         onAvailableFilesChange?.(filenames);
+        setMetadataError(null);
         toast.success("Dataset reloaded successfully");
       } else {
         setDatasetMetadata([]);
@@ -346,6 +351,7 @@ export const AudioDatasetPanel = ({
       }
     } catch (error) {
       console.error('Failed to reload dataset:', error);
+      setMetadataError(error instanceof Error ? error.message : 'Failed to reload dataset');
       toast.error("Failed to reload dataset");
     }
   }, [dataset, originalDataset, onAvailableFilesChange, onDatasetMetadataChange]);
@@ -366,6 +372,7 @@ export const AudioDatasetPanel = ({
     // Skip legacy "custom" (individual uploaded files)
     if (datasetToUse === "custom") {
       setDatasetMetadata([]);
+      setMetadataLoading(false);
       return;
     }
     
@@ -375,6 +382,7 @@ export const AudioDatasetPanel = ({
     
     if (!allowed.includes(datasetToUse) && !isCustomDataset) {
       setDatasetMetadata([]);
+      setMetadataLoading(false);
       return;
     }
     
@@ -384,13 +392,15 @@ export const AudioDatasetPanel = ({
     // the previous dataset's filenames against the new dataset and every request
     // 404s until this fetch resolves.
     setDatasetMetadata([]);
+    setMetadataError(null);
+    setMetadataLoading(true);
     onDatasetMetadataChange?.([]);
     onAvailableFilesChange?.([]);
 
     const ac = new AbortController();
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/${datasetToUse}/metadata`, { signal: ac.signal, credentials: 'include' });
+        const res = await fetch(`${API_BASE}/${encodeURIComponent(datasetToUse)}/metadata`, { signal: ac.signal, credentials: 'include' });
         if (!res.ok) throw new Error(`Failed to fetch metadata: ${res.status}`);
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -409,6 +419,7 @@ export const AudioDatasetPanel = ({
           });
 
           onAvailableFilesChange?.(filenames);
+          setMetadataError(null);
         } else {
           setDatasetMetadata([]);
           onDatasetMetadataChange?.([]);
@@ -416,11 +427,16 @@ export const AudioDatasetPanel = ({
         }
       } catch (e) {
         const name = (e as { name?: string } | null)?.name;
-        if (name !== 'AbortError') console.error(e);
+        if (name !== 'AbortError') {
+          console.error(e);
+          setMetadataError(e instanceof Error ? e.message : 'Failed to load dataset');
+        }
+      } finally {
+        if (!ac.signal.aborted) setMetadataLoading(false);
       }
     })();
     return () => ac.abort();
-  }, [originalDataset, dataset]);
+  }, [originalDataset, dataset, datasetRefreshToken]);
 
   const handleUploadClick = useCallback(() => {
     fileInputRef.current?.click();
@@ -504,9 +520,14 @@ export const AudioDatasetPanel = ({
                 </TooltipContent>
               </Tooltip>
             </div>
-            <div className="flex items-center gap-1.5" role="status" aria-live="polite">
+          <div className="flex items-center gap-1.5" role="status" aria-live="polite">
+              {dataset.startsWith('custom:') && (
+                <Badge variant="outline" className="text-[10px] bg-muted">
+                  {metadataLoading ? 'Loading selected dataset…' : `${datasetMetadata.length} in selected dataset`}
+                </Badge>
+              )}
               <Badge variant="outline" className="text-[10px] bg-muted">
-                {uploadedFiles ? `${uploadedFiles.length} uploaded` : "0 files"}
+                {uploadedFiles ? `${uploadedFiles.length} separate uploads` : "0 separate uploads"}
               </Badge>
               {batchInferenceStatus === 'running' && batchInferenceQueue.length > 0 && (
                 <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
@@ -551,6 +572,12 @@ export const AudioDatasetPanel = ({
         </div>
         
         {/* Search bar */}
+        {metadataError && <p role="alert" className="px-3 pt-2 text-xs text-destructive">{metadataError}</p>}
+        {dataset.startsWith('custom:') && datasetMetadata.length === 0 && !metadataError && !metadataLoading && (
+          <p className="px-3 pt-2 text-xs text-muted-foreground">
+            This dataset has no audio files. Add files in Manage Datasets; separate uploads are not included automatically.
+          </p>
+        )}
         <div className="px-3 pt-2.5 pb-1">
           <div className="relative border border-gray-200 rounded-lg px-2 py-1">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-3 w-3 text-muted-foreground" />

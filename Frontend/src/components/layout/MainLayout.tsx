@@ -49,6 +49,7 @@ export const MainLayout = () => {
   const [selectedFile, setSelectedFile] = useState<UploadedFile | null>(null);
   const [model, setModel] = useState("whisper-base");
   const [dataset, setDataset] = useState("common-voice");
+  const [datasetRefreshToken, setDatasetRefreshToken] = useState(0);
   const [batchInferenceStatus, setBatchInferenceStatus] = useState<'idle' | 'running' | 'done'>('idle');
   const [availableFiles, setAvailableFiles] = useState<string[]>([]);
   // Which dataset `availableFiles` was loaded for. Filenames are only meaningful
@@ -569,6 +570,9 @@ export const MainLayout = () => {
           onToggleRightPanel={toggleRightPanel}
           onToggleBottomPanel={toggleBottomPanel}
           onUploadClick={handleToolbarUpload}
+          onDatasetUpdated={(datasetName) => {
+            if (datasetName === dataset) setDatasetRefreshToken((value) => value + 1);
+          }}
         />
         </header>
 
@@ -635,6 +639,7 @@ export const MainLayout = () => {
                     model={model}
                     dataset={effectiveDataset}
                     originalDataset={dataset}
+                    datasetRefreshToken={datasetRefreshToken}
                     batchInferenceStatus={batchInferenceStatus}
                     onBatchInferenceStart={handleBatchInferenceStart}
                     onBatchInferenceComplete={handleBatchInferenceComplete}
